@@ -1,0 +1,2100 @@
+/* ==========================================================================
+   우리 가족 기록장 · 태블릿 가로형
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var STORAGE_KEY = 'family-record-tablet.v1';
+  var STAMP_COUNT = 20;
+  var REWARD_PER_10MIN = 500;
+  var STUDY_BONUS_MIN = 30;
+  var STUDY_BONUS = 1000;
+
+  var MEMBERS = {
+    choco: { id: 'choco', name: '초코하임', kind: '포근한 곰돌이', mood: '오늘도 신나요', moodIco: '🍫', base: 12000 },
+    hodori: { id: 'hodori', name: '호도리', kind: '말랑한 토끼', mood: '딸기가 먹고 싶어요', moodIco: '🍓', base: 8000 }
+  };
+  var MEMBER_IDS = ['choco', 'hodori'];
+
+  var PAGES = [
+    { id: 'home', nav: '홈', short: '홈', icon: 'home', title: '우리집 홈', sub: '오늘의 날씨와 가족 소식을 한눈에' },
+    { id: 'study', nav: '할 일 & 공부', short: '할일', icon: 'todo', title: '할 일 & 공부 타이머', sub: '오늘 할 일을 체크하고, 공부한 시간을 차곡차곡' },
+    { id: 'stamps', nav: '도장판 & 칭찬', short: '도장', icon: 'stamp', title: '도장판 & 칭찬 스티커', sub: '칭찬 도장을 모으고, 서로에게 스티커를 보내요' },
+    { id: 'allowance', nav: '용돈기입장', short: '용돈', icon: 'wallet', title: '용돈기입장', sub: '공부로 모은 용돈과 씀씀이를 기록해요' },
+    { id: 'calendar', nav: '가족 캘린더', short: '캘린더', icon: 'calendar', title: '가족 캘린더', sub: '학원 시간과 준비물을 미리 챙겨요' },
+    { id: 'chat', nav: '가족 건의함', short: '건의', icon: 'chat', title: '가족 건의 & 채팅', sub: '먹고 싶은 메뉴와 하고 싶은 것을 자유롭게' }
+  ];
+
+  var MISSIONS = [
+    { text: '가족이랑 아침 인사하기', who: '함께' },
+    { text: '책 10분 읽기', who: '각자' },
+    { text: '식탁 정리 돕기', who: '번갈아' },
+    { text: '오늘 기분 한 줄 쓰기', who: '함께' }
+  ];
+
+  /* 매일 고정 루틴 (템플릿) — 요일·구성원별로 자동으로 오늘 목록에 나타나요 */
+  var ROUTINE_TEMPLATE = [
+    { id: 'rt-brush', group: 'morning', text: '양치하기', member: 'both' },
+    { id: 'rt-blanket', group: 'morning', text: '이불정리하기', member: 'both' },
+    { id: 'rt-wash', group: 'afternoon', text: '귀가 후 손 씻기', member: 'both' },
+    { id: 'rt-english-read', group: 'afternoon', text: '영어 따라읽기 연습', member: 'both' },
+    { id: 'rt-english-listen-choco', group: 'afternoon', text: '영어 집중듣기 1권', member: 'choco' },
+    { id: 'rt-english-listen-hodori', group: 'afternoon', text: '영어 집중듣기 2권', member: 'hodori' },
+    { id: 'rt-math', group: 'afternoon', text: '수학학습', member: 'both' },
+    { id: 'rt-homework', group: 'afternoon', text: '학교숙제', member: 'both' },
+    { id: 'rt-dictation', group: 'afternoon', text: '받아쓰기 연습', member: 'hodori', weekday: 1, badge: '월요일 고정' }
+  ];
+  var GROUP_LABEL = { morning: '아침', afternoon: '점심 · 귀가 후' };
+  var GROUP_ICON = { morning: '🌞', afternoon: '🎒' };
+  var WEEKDAY_KR = ['일', '월', '화', '수', '목', '금', '토'];
+
+  var QUICKS = [
+    { emoji: '🍳', label: '아침 메뉴', text: '내일 아침에 따뜻한 팬케이크 먹고 싶어요 🥞' },
+    { emoji: '🍱', label: '저녁 메뉴', text: '오늘 저녁은 뭐 먹고 싶어요~?' },
+    { emoji: '🍓', label: '간식', text: '간식으로 딸기 먹고 싶어요 🍓' },
+    { emoji: '🎈', label: '하고 싶은 것', text: '이번 주말에 가족이랑 놀이터 가고 싶어요 🎈' },
+    { emoji: '💬', label: '기타', text: '가족에게 바라는 점: ' }
+  ];
+
+  /* ------------------------------------------------------------------ */
+  /* 유틸                                                               */
+  /* ------------------------------------------------------------------ */
+  function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function uid() { return 'i' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3); }
+  function won(n) { return Math.round(n).toLocaleString('ko-KR'); }
+  function dateKey(d) { d = d || new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function timeHM(iso) { var d = new Date(iso); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  function dayLabel(iso) {
+    var d = new Date(iso), t = new Date();
+    if (dateKey(d) === dateKey(t)) return '오늘';
+    var y = new Date(t.getTime() - 864e5);
+    if (dateKey(d) === dateKey(y)) return '어제';
+    return (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
+  }
+  function daysAgoISO(days, hoursAgo) {
+    var d = new Date();
+    d.setDate(d.getDate() - (days || 0));
+    if (hoursAgo) d.setHours(d.getHours() - hoursAgo);
+    return d.toISOString();
+  }
+  function pct(a, b) { return b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0; }
+  function nowGreeting() {
+    var h = new Date().getHours();
+    if (h < 6) return '포근한 밤이에요';
+    if (h < 12) return '상쾌한 아침이에요';
+    if (h < 17) return '따뜻한 오후예요';
+    if (h < 21) return '노을이 예뻐요';
+    return '포근한 저녁이에요';
+  }
+  function weekdayKR(d) { return ['일', '월', '화', '수', '목', '금', '토'][d.getDay()]; }
+  function sameDay(iso) { return dateKey(new Date(iso)) === dateKey(); }
+
+  /* ------------------------------------------------------------------ */
+  /* 그림 (SVG)                                                         */
+  /* ------------------------------------------------------------------ */
+  function bearFace(uidSuffix) {
+    return '<svg viewBox="0 0 64 64" aria-hidden="true">' +
+      '<circle cx="15" cy="19" r="9" fill="#FFF8EC" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<circle cx="15" cy="19" r="4.2" fill="#F3CFC0"/>' +
+      '<circle cx="49" cy="19" r="9" fill="#FFF8EC" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<circle cx="49" cy="19" r="4.2" fill="#F3CFC0"/>' +
+      '<ellipse cx="32" cy="36" rx="22" ry="20" fill="#FFFCF6" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<ellipse cx="24" cy="35" rx="2.1" ry="2.8" fill="#4B3A2C"/>' +
+      '<ellipse cx="40" cy="35" rx="2.1" ry="2.8" fill="#4B3A2C"/>' +
+      '<ellipse cx="17" cy="41" rx="3.6" ry="2.2" fill="#F9C3C9" opacity=".9"/>' +
+      '<ellipse cx="47" cy="41" rx="3.6" ry="2.2" fill="#F9C3C9" opacity=".9"/>' +
+      '<path d="M29 41q3 3.2 6 0" fill="none" stroke="#4B3A2C" stroke-width="1.9" stroke-linecap="round"/>' +
+      '</svg>';
+  }
+  function rabbitFace() {
+    return '<svg viewBox="0 0 64 64" aria-hidden="true">' +
+      '<ellipse cx="24" cy="13" rx="5.2" ry="11" transform="rotate(-9 24 13)" fill="#FFF8EC" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<ellipse cx="24" cy="14" rx="2.4" ry="6.6" transform="rotate(-9 24 14)" fill="#F8D3D8"/>' +
+      '<ellipse cx="40" cy="13" rx="5.2" ry="11" transform="rotate(9 40 13)" fill="#FFF8EC" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<ellipse cx="40" cy="14" rx="2.4" ry="6.6" transform="rotate(9 40 14)" fill="#F8D3D8"/>' +
+      '<ellipse cx="32" cy="38" rx="19" ry="17" fill="#FFFCF6" stroke="#E2C6A6" stroke-width="2.6"/>' +
+      '<ellipse cx="25" cy="37" rx="2" ry="2.7" fill="#4B3A2C"/>' +
+      '<ellipse cx="39" cy="37" rx="2" ry="2.7" fill="#4B3A2C"/>' +
+      '<ellipse cx="18" cy="43" rx="3.3" ry="2.1" fill="#F9C3C9" opacity=".9"/>' +
+      '<ellipse cx="46" cy="43" rx="3.3" ry="2.1" fill="#F9C3C9" opacity=".9"/>' +
+      '<path d="M30 43q2 2.4 4 0" fill="none" stroke="#4B3A2C" stroke-width="1.8" stroke-linecap="round"/>' +
+      '<path d="M36.5 17.5l5.5-4.6 2 7.4z" fill="#F7A8B8"/>' +
+      '<path d="M36.5 17.5l-3.6-5.6 6.6.6z" fill="#F79FB1"/>' +
+      '</svg>';
+  }
+  function faceSVG(id) { return id === 'choco' ? bearFace() : rabbitFace(); }
+
+  function charSVG(id) {
+    var eyes = '<ellipse cx="50" cy="68" rx="3.4" ry="4.4" fill="#4B3A2C"/><ellipse cx="78" cy="68" rx="3.4" ry="4.4" fill="#4B3A2C"/>' +
+      '<circle cx="51.4" cy="66.2" r="1.2" fill="#fff"/><circle cx="79.4" cy="66.2" r="1.2" fill="#fff"/>';
+    var mouth = '<ellipse cx="64" cy="74" rx="2.6" ry="1.9" fill="#E8B4A6"/>' +
+      '<path d="M57 78q7 6.5 14 0" fill="none" stroke="#4B3A2C" stroke-width="2.4" stroke-linecap="round"/>';
+    var blush = '<ellipse cx="40" cy="78" rx="7.5" ry="4.6" fill="#F9C3C9" opacity=".85"/>' +
+      '<ellipse cx="88" cy="78" rx="7.5" ry="4.6" fill="#F9C3C9" opacity=".85"/>';
+    var bodyOpen = '<ellipse cx="64" cy="116" rx="30" ry="6" fill="#ECD8C0" opacity=".5"/>' +
+      '<path d="M40 101c0-11 10-19 24-19s24 8 24 19c0 5.5-4.5 9-11 9H51c-6.5 0-11-3.5-11-9z" fill="#FFF9F0" stroke="#E2C6A6" stroke-width="3" stroke-linejoin="round"/>';
+
+    if (id === 'choco') {
+      return '<svg viewBox="0 0 128 128" role="img" aria-label="초코하임 곰돌이">' + bodyOpen +
+        '<circle cx="34" cy="43" r="16.5" fill="#FFF9F0" stroke="#E2C6A6" stroke-width="3"/>' +
+        '<circle cx="34" cy="43" r="8" fill="#F1CBB8"/>' +
+        '<circle cx="94" cy="43" r="16.5" fill="#FFF9F0" stroke="#E2C6A6" stroke-width="3"/>' +
+        '<circle cx="94" cy="43" r="8" fill="#F1CBB8"/>' +
+        '<ellipse cx="64" cy="73" rx="40" ry="36" fill="#FFFCF6" stroke="#E2C6A6" stroke-width="3"/>' +
+        eyes + blush + mouth +
+        '<g transform="rotate(-14 96 96)">' +
+        '<rect x="87" y="88" width="20" height="14" rx="3.5" fill="#B77B4E" stroke="#96603A" stroke-width="2"/>' +
+        '<rect x="90" y="91" width="4.5" height="4" rx="1" fill="#8D5734"/>' +
+        '<rect x="98" y="91" width="4.5" height="4" rx="1" fill="#8D5734"/>' +
+        '<rect x="94" y="97" width="4.5" height="4" rx="1" fill="#8D5734"/>' +
+        '</g></svg>';
+    }
+    return '<svg viewBox="0 0 128 128" role="img" aria-label="호도리 토끼">' + bodyOpen +
+      '<ellipse cx="46" cy="31" rx="10.5" ry="25" transform="rotate(-8 46 31)" fill="#FFF9F0" stroke="#E2C6A6" stroke-width="3"/>' +
+      '<ellipse cx="46" cy="32" rx="5" ry="17" transform="rotate(-8 46 32)" fill="#F8D3D8"/>' +
+      '<ellipse cx="82" cy="31" rx="10.5" ry="25" transform="rotate(8 82 31)" fill="#FFF9F0" stroke="#E2C6A6" stroke-width="3"/>' +
+      '<ellipse cx="82" cy="32" rx="5" ry="17" transform="rotate(8 82 32)" fill="#F8D3D8"/>' +
+      '<ellipse cx="64" cy="75" rx="39" ry="35" fill="#FFFCF6" stroke="#E2C6A6" stroke-width="3"/>' +
+      eyes + blush + mouth +
+      '<g transform="rotate(10 96 96)">' +
+      '<path d="M96 87c-7 0-11 5.5-11 10.5 0 6.5 5.5 11 11 11s11-4.5 11-11C107 92.5 103 87 96 87z" fill="#F4777F" stroke="#D85761" stroke-width="2"/>' +
+      '<path d="M96 88c-2.5-4-7-4-9-1.5 2-4.5 7-4.5 9 .5 2-5 7-5 9-.5-2-2.5-6.5-2.5-9 1.5z" fill="#8CC7A1"/>' +
+      '</g></svg>';
+  }
+
+  /* 스티커 */
+  var STICKERS = {
+    pancake: '<svg viewBox="0 0 64 64" aria-hidden="true"><ellipse cx="32" cy="54" rx="21" ry="5" fill="#F3E3D1"/><ellipse cx="32" cy="46" rx="19" ry="6.5" fill="#E8B87A" stroke="#C99A60" stroke-width="2"/><ellipse cx="32" cy="39" rx="18" ry="6" fill="#F2C88E" stroke="#C99A60" stroke-width="2"/><ellipse cx="32" cy="33" rx="17" ry="5.6" fill="#F8D8AA" stroke="#C99A60" stroke-width="2"/><rect x="26" y="23" width="11" height="8" rx="2.2" fill="#FFE9A8" stroke="#E0C36A" stroke-width="1.6" transform="rotate(-8 31 27)"/></svg>',
+    strawberry: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 55c-11 0-18-9.5-18-17 0-6 4.6-9.5 10-9.5 3 0 5.6 1.2 8 3.2 2.4-2 5-3.2 8-3.2 5.4 0 10 3.5 10 9.5 0 7.5-7 17-18 17z" fill="#F4777F" stroke="#D85761" stroke-width="2"/><path d="M32 30c-3.4-6-9.4-6.4-12.4-3.4 2.4-5.6 9.4-6 12.4.4 3-6.4 10-6 12.4-.4-3-3-9-2.6-12.4 3.4z" fill="#8CC7A1" stroke="#6EAE86" stroke-width="1.4"/><circle cx="25" cy="40" r="1.3" fill="#FFE9A8"/><circle cx="38" cy="42" r="1.3" fill="#FFE9A8"/><circle cx="31" cy="47" r="1.3" fill="#FFE9A8"/><circle cx="33" cy="36" r="1.2" fill="#FFE9A8"/></svg>',
+    egg: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 12c9 0 17 14 17 24a17 17 0 0 1-34 0c0-10 8-24 17-24z" fill="#FFFDF7" stroke="#E7D6C2" stroke-width="2.4"/><circle cx="32" cy="37" r="9" fill="#FFD25E" stroke="#EFB93F" stroke-width="1.8"/><ellipse cx="29" cy="34" rx="2.6" ry="1.8" fill="#FFF1B8" opacity=".9"/></svg>',
+    apple: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 22c4-4 12-4 15 2 4 8-2 22-8 26-3 2-4.5-.5-7-.5s-4 2.5-7 .5c-6-4-12-18-8-26 3-6 11-6 15-2z" fill="#F2777F" stroke="#D4575F" stroke-width="2"/><path d="M32 22c0-5 2-8 6-9" fill="none" stroke="#8C6B4F" stroke-width="2.6" stroke-linecap="round"/><path d="M34 17c3-4 8-4 10-2-2 4-7 5-10 2z" fill="#8CC7A1"/><ellipse cx="24" cy="31" rx="3" ry="4" fill="#FBD3D6" opacity=".75"/></svg>',
+    star: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 8l7.4 15.4 16.6 2.1-12.2 11.6 3.2 16.4L32 45.6 16.6 53.5l3.2-16.4L7.6 25.5l16.6-2.1z" fill="#FFD86B" stroke="#E6B94A" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="26" cy="33" rx="1.6" ry="2.2" fill="#7A5B22"/><ellipse cx="38" cy="33" rx="1.6" ry="2.2" fill="#7A5B22"/><path d="M29 37q3 3 6 0" fill="none" stroke="#7A5B22" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    heart: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 52c-14-8-22-15-22-24a11 11 0 0 1 22-4 11 11 0 0 1 22 4c0 9-8 16-22 24z" fill="#F79AA9" stroke="#E07E90" stroke-width="2.4" stroke-linejoin="round"/><ellipse cx="22" cy="26" rx="4" ry="3" fill="#FDE1E6" opacity=".85"/></svg>',
+    cloud: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M18 44a9 9 0 0 1-1-17.9A13 13 0 0 1 42 24a9 9 0 0 1 2 20z" fill="#F4FAFF" stroke="#C9DFEE" stroke-width="2.4"/><ellipse cx="27" cy="34" rx="1.6" ry="2.1" fill="#6C8CA3"/><ellipse cx="38" cy="34" rx="1.6" ry="2.1" fill="#6C8CA3"/><path d="M29 38q3 2.6 6 0" fill="none" stroke="#6C8CA3" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    carrot: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M40 20l10 10-20 26c-1.6 2-4.4.6-4-1.8L31 30z" fill="#F7A45E" stroke="#DE8540" stroke-width="2.2" stroke-linejoin="round"/><path d="M40 20c-4-6-10-6-12-2 1 4 6 6 12 2z" fill="#8CC7A1" stroke="#6EAE86" stroke-width="1.6"/><path d="M44 24c6-1 8-6 6-9-4 0-7 4-6 9z" fill="#8CC7A1" stroke="#6EAE86" stroke-width="1.6"/><path d="M33 37l5 5" stroke="#DE8540" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    milk: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 18h16v30a4 4 0 0 1-4 4h-8a4 4 0 0 1-4-4z" fill="#FFFDF8" stroke="#D8D3E6" stroke-width="2.2"/><path d="M24 18l6-7h4l6 7z" fill="#EDF3FB" stroke="#D8D3E6" stroke-width="2.2"/><rect x="24" y="24" width="16" height="8" fill="#BFDCF3"/><circle cx="32" cy="40" r="4" fill="#FBD3D6" opacity=".8"/></svg>',
+    rice: '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M14 32h36c0 12-6 20-18 20s-18-8-18-20z" fill="#FFFDF8" stroke="#DCD3C6" stroke-width="2.2"/><path d="M18 32c1-8 6-12 14-12s13 4 14 12z" fill="#FFF9EE" stroke="#E4DACB" stroke-width="2"/><path d="M14 32h36" stroke="#DCD3C6" stroke-width="2.2"/><circle cx="27" cy="28" r="1.4" fill="#E0D5C4"/><circle cx="35" cy="26" r="1.4" fill="#E0D5C4"/><circle cx="32" cy="31" r="1.4" fill="#E0D5C4"/></svg>',
+    bearface: bearFace(),
+    rabbitface: rabbitFace()
+  };
+  var STICKER_KEYS = ['pancake', 'strawberry', 'egg', 'apple', 'star', 'heart', 'cloud', 'carrot', 'milk', 'rice', 'bearface', 'rabbitface'];
+  function stickerSVG(key, cls) {
+    var s = STICKERS[key] || STICKERS.star;
+    if (cls) s = s.replace('<svg ', '<svg class="' + cls + '" ');
+    return s;
+  }
+
+  /* 아이콘 */
+  var ICONS = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.4 12 4.8l8 6.6V19a1.4 1.4 0 0 1-1.4 1.4H5.4A1.4 1.4 0 0 1 4 19z"/><path d="M9.6 20.4v-6h4.8v6"/></svg>',
+    todo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.6" width="16" height="16.8" rx="3.4"/><path d="M8 9.4l1.8 1.9 3.4-3.5"/><path d="M8 15.4h7"/></svg>',
+    stamp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="11" r="7.4"/><path d="M12 7.6l1.3 2.6 2.8.4-2 2 .5 2.8-2.6-1.4-2.6 1.4.5-2.8-2-2 2.8-.4z"/><path d="M7 20.4h10"/></svg>',
+    wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 8.4A2.4 2.4 0 0 1 6 6h11a2.4 2.4 0 0 1 2.4 2.4"/><rect x="3.6" y="8.4" width="16.8" height="10.2" rx="2.6"/><circle cx="16.4" cy="13.5" r="1.3"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 12.2c0 4-3.8 7.2-8.4 7.2-1 0-2-.1-2.9-.4L4.4 20.4l1.3-3.7A6.9 6.9 0 0 1 3.6 12.2c0-4 3.8-7.2 8.4-7.2s8.4 3.2 8.4 7.2z"/><circle cx="8.6" cy="12.2" r="1"/><circle cx="12" cy="12.2" r="1"/><circle cx="15.4" cy="12.2" r="1"/></svg>',
+    calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.6" y="5.6" width="16.8" height="14.8" rx="3"/><path d="M3.6 10h16.8"/><path d="M8.2 3.6v3.2"/><path d="M15.8 3.6v3.2"/><circle cx="12" cy="14.6" r="1.3"/></svg>',
+    download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 10.4l4 4 4-4"/><path d="M4.8 18.4h14.4"/></svg>',
+    upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V5"/><path d="M8 8.6l4-4 4 4"/><path d="M4.8 18.4h14.4"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.6l4.6 4.6L19 6.6"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.6 7h14.8"/><path d="M9.4 7V5.2h5.2V7"/><path d="M6.6 7l.9 12.2h9l.9-12.2"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 19.2l.9-3.7L15.8 5.4a1.9 1.9 0 0 1 2.7 2.7L8.4 18.4z"/><path d="M14.2 7l2.7 2.7"/></svg>',
+    play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.4 5.2l11 6.8-11 6.8z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6.4" y="5" width="4.2" height="14" rx="1.4"/><rect x="13.4" y="5" width="4.2" height="14" rx="1.4"/></svg>',
+    reset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12a7.2 7.2 0 1 0 2.2-5.2"/><path d="M4.6 4.4v4.4h4.4"/></svg>'
+  };
+  function icon(name) { return ICONS[name] || ''; }
+
+  function weatherSVG(code) {
+    var c = Number(code);
+    var sun = '<circle cx="32" cy="32" r="11" fill="#FFD86B" stroke="#E9B94A" stroke-width="2.4"/>' +
+      '<g stroke="#E9B94A" stroke-width="2.6" stroke-linecap="round"><path d="M32 12v5"/><path d="M32 47v5"/><path d="M12 32h5"/><path d="M47 32h5"/><path d="M18 18l3.4 3.4"/><path d="M42.6 42.6L46 46"/><path d="M46 18l-3.4 3.4"/><path d="M21.4 42.6L18 46"/></g>';
+    var cloud = '<path d="M20 42a8 8 0 0 1-1-15.9A12 12 0 0 1 42 24a8 8 0 0 1 2 18z" fill="#F7FBFF" stroke="#C9DFEE" stroke-width="2.4"/>';
+    if (c === 0 || c === 1) return '<svg viewBox="0 0 64 64" aria-hidden="true">' + sun + '</svg>';
+    if (c === 2) return '<svg viewBox="0 0 64 64" aria-hidden="true">' + sun.replace('cy="32" r="11"', 'cx="40" cy="24" r="9"') + '<path d="M16 44a7.5 7.5 0 0 1-1-14.9A11 11 0 0 1 36 27a7.5 7.5 0 0 1 2 17z" fill="#F7FBFF" stroke="#C9DFEE" stroke-width="2.4"/></svg>';
+    if (c === 3 || c === 45 || c === 48) return '<svg viewBox="0 0 64 64" aria-hidden="true">' + cloud + '</svg>';
+    if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) {
+      return '<svg viewBox="0 0 64 64" aria-hidden="true">' + cloud +
+        '<g stroke="#8FBFE0" stroke-width="2.8" stroke-linecap="round"><path d="M24 48l-2 7"/><path d="M33 48l-2 7"/><path d="M42 48l-2 7"/></g></svg>';
+    }
+    if ((c >= 71 && c <= 77) || c === 85 || c === 86) {
+      return '<svg viewBox="0 0 64 64" aria-hidden="true">' + cloud +
+        '<g stroke="#9EC8E4" stroke-width="2.6" stroke-linecap="round"><path d="M25 50v4"/><path d="M25 57v1"/><path d="M36 50v4"/><path d="M36 57v1"/><path d="M46 52v4"/></g></svg>';
+    }
+    return '<svg viewBox="0 0 64 64" aria-hidden="true">' + cloud +
+      '<path d="M30 46l-4 9 6-2 3 7 4-10-6 2z" fill="#FFD86B" stroke="#E9B94A" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 상태                                                               */
+  /* ------------------------------------------------------------------ */
+  function baseRoutines() {
+    return ROUTINE_TEMPLATE.map(function (r) {
+      return {
+        id: r.id, group: r.group, text: r.text, member: r.member,
+        weekday: r.weekday == null ? null : Number(r.weekday),
+        badge: r.badge || ''
+      };
+    });
+  }
+
+  function baseMissions() {
+    return MISSIONS.map(function (m) {
+      return { id: uid(), text: m.text, who: m.who, done: false };
+    });
+  }
+
+  function defaultState() {
+    return {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      activeMember: 'choco',
+      page: 'home',
+      members: {
+        choco: { stars: 7, base: MEMBERS.choco.base },
+        hodori: { stars: 5, base: MEMBERS.hodori.base }
+      },
+      missions: { date: dateKey(), items: baseMissions() },
+      routines: baseRoutines(),
+      routineDone: {},
+      routineBonus: {},
+      todos: [
+        { id: uid(), member: 'choco', text: '구구단 2단 외우기', kind: 'study', target: 10, done: false },
+        { id: uid(), member: 'choco', text: '책 15분 읽기', kind: 'study', target: 15, done: false },
+        { id: uid(), member: 'hodori', text: '구몬 수학 4장', kind: 'study', target: 15, done: false },
+        { id: uid(), member: 'hodori', text: '장난감 정리하기', kind: 'todo', target: 0, done: false }
+      ],
+      timer: { mode: 'countdown', targetMin: 20, running: false, startedAt: null, baseMs: 0 },
+      sessions: [],
+      stamps: { choco: new Array(STAMP_COUNT).fill(false), hodori: new Array(STAMP_COUNT).fill(false) },
+      milestones: { choco: [], hodori: [] },
+      praise: [
+        { id: uid(), from: 'hodori', to: 'choco', sticker: 'heart', text: '오늘 숙제 먼저 해서 멋져요!', at: daysAgoISO(0, 3) },
+        { id: uid(), from: 'choco', to: 'hodori', sticker: 'strawberry', text: '딸기 나눠줘서 고마워 🍓', at: daysAgoISO(0, 2) }
+      ],
+      ledger: [
+        { id: uid(), member: 'choco', type: 'income', amount: 5000, category: '용돈', memo: '이번 주 용돈', at: daysAgoISO(1, 20) },
+        { id: uid(), member: 'choco', type: 'expense', amount: 1200, category: '간식', memo: '붕어빵', at: daysAgoISO(1, 6) },
+        { id: uid(), member: 'hodori', type: 'income', amount: 3000, category: '용돈', memo: '할머니 용돈', at: daysAgoISO(2, 5) }
+      ],
+      claims: {},
+      settings: { rewardPer10: REWARD_PER_10MIN, bonus: STUDY_BONUS },
+      events: seedEvents(),
+      weather: null,
+      chat: seedChat()
+    };
+  }
+
+  function normalize(raw, base) {
+    var s = Object.assign({}, base, raw || {});
+    s.members = Object.assign({}, base.members, raw.members || {});
+    MEMBER_IDS.forEach(function (id) {
+      s.members[id] = Object.assign({ stars: 0, base: 0 }, s.members[id] || {});
+      s.members[id].stars = Number(s.members[id].stars) || 0;
+      s.members[id].base = Number(s.members[id].base) || 0;
+    });
+    ['todos', 'sessions', 'praise', 'ledger', 'chat'].forEach(function (k) {
+      if (!Array.isArray(s[k])) s[k] = base[k];
+    });
+    if (!s.missions || !Array.isArray(s.missions.items) || !s.missions.items.length) s.missions = base.missions;
+    if (!s.stamps || typeof s.stamps !== 'object') s.stamps = base.stamps;
+    MEMBER_IDS.forEach(function (id) {
+      var arr = s.stamps[id];
+      if (!Array.isArray(arr)) arr = [];
+      arr = arr.slice(0, STAMP_COUNT);
+      while (arr.length < STAMP_COUNT) arr.push(false);
+      s.stamps[id] = arr.map(Boolean);
+    });
+    if (!s.milestones || typeof s.milestones !== 'object') s.milestones = { choco: [], hodori: [] };
+    if (!Array.isArray(s.routines) || !s.routines.length) s.routines = base.routines;
+    s.routines = s.routines.filter(function (r) { return r && r.id && r.text; }).map(function (r) {
+      return {
+        id: String(r.id), text: String(r.text),
+        group: r.group === 'morning' ? 'morning' : 'afternoon',
+        member: (r.member === 'choco' || r.member === 'hodori') ? r.member : 'both',
+        weekday: (r.weekday == null || r.weekday === '') ? null : Number(r.weekday),
+        badge: r.badge || ''
+      };
+    });
+    if (!s.routineDone || typeof s.routineDone !== 'object') s.routineDone = {};
+    if (!s.routineBonus || typeof s.routineBonus !== 'object') s.routineBonus = {};
+    if (!Array.isArray(s.events)) s.events = base.events;
+    s.events = s.events.filter(function (e) { return e && e.id && e.title; }).map(function (e) {
+      return {
+        id: String(e.id), title: String(e.title),
+        member: (e.member === 'choco' || e.member === 'hodori') ? e.member : 'all',
+        repeat: Array.isArray(e.repeat) ? e.repeat.map(Number).filter(function (n) { return n >= 0 && n <= 6; }) : [],
+        date: e.date || null,
+        start: e.start || '16:00', end: e.end || '',
+        place: e.place || '', prep: e.prep || '', memo: e.memo || '',
+        example: !!e.example
+      };
+    });
+    s.timer = Object.assign({}, base.timer, s.timer || {});
+    s.settings = Object.assign({}, base.settings, s.settings || {});
+    if (!s.claims || typeof s.claims !== 'object') s.claims = {};
+    if (!Array.isArray(s.chat) || !s.chat.length) s.chat = seedChat();
+    if (!s.weather || typeof s.weather !== 'object') s.weather = null;
+    if (MEMBER_IDS.indexOf(s.activeMember) < 0) s.activeMember = 'choco';
+    if (!PAGES.some(function (p) { return p.id === s.page; })) s.page = 'home';
+    return s;
+  }
+
+  function seedEvents() {
+    return [
+      { id: 'ev-english', title: '영어학원', member: 'choco', repeat: [1, 3], date: null, start: '16:30', end: '17:40', place: '리틀영어학원', prep: '영어책 · 필통', memo: '', example: true },
+      { id: 'ev-piano', title: '피아노 학원', member: 'hodori', repeat: [5], date: null, start: '15:30', end: '16:10', place: '음악학원 3층', prep: '악보 · 물통', memo: '', example: true },
+      { id: 'ev-taekwondo', title: '태권도', member: 'hodori', repeat: [2, 4], date: null, start: '17:00', end: '18:00', place: '힘찬태권도', prep: '도복 · 띠', memo: '', example: true },
+      { id: 'ev-family-read', title: '가족 독서 시간', member: 'all', repeat: [0], date: null, start: '19:30', end: '20:00', place: '거실', prep: '읽고 싶은 책', memo: '주말엔 같이 읽어요', example: true }
+    ];
+  }
+
+  function seedChat() {
+    return [
+      { id: uid(), from: 'hodori', type: 'text', tag: '건의', text: '내일 아침에 따뜻한 팬케이크 먹고 싶어요 🥞', at: daysAgoISO(0, 2.2), reactions: { confirm: ['choco'], doit: [] } },
+      { id: uid(), from: 'choco', type: 'text', tag: '질문', text: '오늘 저녁은 뭐 먹고 싶어요~?', at: daysAgoISO(0, 2.0), reactions: { confirm: [], doit: [] } },
+      { id: uid(), from: 'hodori', type: 'text', tag: '답장', text: '좋아요! 딸기도 같이 먹자 🍓', at: daysAgoISO(0, 1.9), reactions: { confirm: [], doit: ['choco'] } },
+      { id: uid(), from: 'choco', type: 'text', tag: '건의', text: '이번 주말엔 가족이랑 놀이터 가고 싶어요 🎈', at: daysAgoISO(0, 1.5), reactions: { confirm: [], doit: [] } }
+    ];
+  }
+
+  var state = null;
+  var saveTimer = null;
+  var modalRoot = null;
+
+  function loadState() {
+    var base = defaultState();
+    var raw = null;
+    try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { raw = null; }
+    if (!raw) return base;
+    try {
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return base;
+      return normalize(parsed, base);
+    } catch (e) {
+      return base;
+    }
+  }
+
+  function save() {
+    try {
+      state.updatedAt = new Date().toISOString();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      setSaveNote('자동 저장됨 · ' + timeHM(state.updatedAt));
+    } catch (e) {
+      setSaveNote('저장할 수 없어요 (브라우저 저장 공간)');
+    }
+  }
+  function saveSoon() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 220);
+  }
+  function setSaveNote(text) {
+    var el = $('#saveNoteText');
+    if (el) el.textContent = text;
+  }
+
+  function ensureDaily() {
+    var today = dateKey();
+    if (!state.missions || state.missions.date !== today) {
+      state.missions = { date: today, items: baseMissions() };
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 계산                                                               */
+  /* ------------------------------------------------------------------ */
+  function memberTodos(id) { return state.todos.filter(function (t) { return t.member === id; }); }
+  function doneTodos(id) { return memberTodos(id).filter(function (t) { return t.done; }).length; }
+  function balanceOf(id) {
+    var m = state.members[id];
+    return state.ledger.filter(function (e) { return e.member === id; }).reduce(function (sum, e) {
+      return sum + (e.type === 'expense' ? -e.amount : e.amount);
+    }, Number(m.base) || 0);
+  }
+  function studySum(id) {
+    return state.ledger.filter(function (e) { return e.member === id && e.type === 'study'; }).reduce(function (s, e) { return s + e.amount; }, 0);
+  }
+  function incomeSum(id) {
+    return state.ledger.filter(function (e) { return e.member === id && e.type === 'income'; }).reduce(function (s, e) { return s + e.amount; }, 0);
+  }
+  function expenseSum(id) {
+    return state.ledger.filter(function (e) { return e.member === id && e.type === 'expense'; }).reduce(function (s, e) { return s + e.amount; }, 0);
+  }
+  function todayMinutes(id) {
+    return state.sessions.filter(function (s) { return s.member === id && sameDay(s.at); })
+      .reduce(function (a, s) { return a + s.minutes; }, 0);
+  }
+  function todayEarned(id) {
+    return state.sessions.filter(function (s) { return s.member === id && sameDay(s.at); })
+      .reduce(function (a, s) { return a + (s.earned || 0); }, 0);
+  }
+  function stampCount(id) { return state.stamps[id].filter(Boolean).length; }
+
+  /* ---- 매일 고정 루틴 ---- */
+  function routinesFor(member, date) {
+    var d = date || new Date();
+    var wd = d.getDay();
+    return state.routines.filter(function (r) {
+      if (r.member !== 'both' && r.member !== member) return false;
+      if (r.weekday != null && Number(r.weekday) !== wd) return false;
+      return true;
+    });
+  }
+  function routineMap(member, date) {
+    var day = state.routineDone[dateKey(date)];
+    if (!day || !day[member]) return {};
+    return day[member];
+  }
+  function isRoutineDone(rid, member, date) { return !!routineMap(member, date)[rid]; }
+  function routineStats(member, date) {
+    var list = routinesFor(member, date);
+    var map = routineMap(member, date);
+    var done = list.filter(function (r) { return map[r.id]; }).length;
+    return { done: done, total: list.length };
+  }
+  function combinedStats(member) {
+    var rs = routineStats(member);
+    var list = memberTodos(member);
+    var tdone = list.filter(function (t) { return t.done; }).length;
+    return { done: rs.done + tdone, total: rs.total + list.length, routines: rs, todos: { done: tdone, total: list.length } };
+  }
+  function pruneRoutineHistory() {
+    var keepFrom = dateKey(new Date(Date.now() - 40 * 864e5));
+    Object.keys(state.routineDone).forEach(function (k) { if (k < keepFrom) delete state.routineDone[k]; });
+    Object.keys(state.routineBonus).forEach(function (k) { if (k < keepFrom) delete state.routineBonus[k]; });
+  }
+
+  function toggleRoutine(rid) {
+    var member = state.activeMember;
+    var r = state.routines.find(function (x) { return x.id === rid; });
+    if (!r) return;
+    if (r.weekday != null && Number(r.weekday) !== new Date().getDay()) return;
+    var dk = dateKey();
+    if (!state.routineDone[dk]) state.routineDone[dk] = {};
+    if (!state.routineDone[dk][member]) state.routineDone[dk][member] = {};
+    var map = state.routineDone[dk][member];
+    var was = !!map[rid];
+    if (was) delete map[rid]; else map[rid] = true;
+    pruneRoutineHistory();
+    if (!was) {
+      var st = routineStats(member);
+      var bonus = state.routineBonus[dk] || {};
+      if (st.total > 0 && st.done === st.total && !bonus[member]) {
+        bonus[member] = true;
+        state.routineBonus[dk] = bonus;
+        state.members[member].stars += 1;
+        save();
+        renderAll();
+        toast(MEMBERS[member].name + ' 오늘 루틴 모두 완료! 별 1개 🌟');
+        return;
+      }
+    }
+    save();
+    renderAll();
+  }
+
+  function addRoutinePreset(text) {
+    var targets = presetTarget === 'both' ? MEMBER_IDS.slice() : [presetTarget];
+    var added = 0;
+    targets.forEach(function (member) {
+      var exists = state.routines.some(function (r) {
+        return r.text === text && r.group === presetSlot && (r.member === member || r.member === 'both');
+      });
+      if (exists) return;
+      state.routines.push({ id: uid(), group: presetSlot, text: text, member: member, weekday: null, badge: '' });
+      added++;
+    });
+    if (presetTarget !== 'both') state.activeMember = presetTarget;
+    save();
+    renderAll();
+    if (added) {
+      toast(text + ' · ' + (presetTarget === 'both' ? '둘 다 루틴' : MEMBERS[presetTarget].name + ' 루틴') + '에 넣었어요 ⚡');
+    } else {
+      toast('이미 목록에 있어요 ✓');
+    }
+  }
+
+  function addRoutine(form) {
+    var text = (form.text.value || '').trim();
+    if (!text) { toast('루틴 이름을 적어 주세요'); return; }
+    var member = form.member.value;
+    if (MEMBER_IDS.indexOf(member) < 0) member = 'both';
+    state.routines.push({
+      id: uid(), group: form.group.value === 'morning' ? 'morning' : 'afternoon',
+      text: text, member: member, weekday: null, badge: ''
+    });
+    save();
+    renderPage();
+    renderNav();
+    toast('매일 고정 루틴에 추가했어요 🔁');
+  }
+
+  function delRoutine(rid) {
+    var r = state.routines.find(function (x) { return x.id === rid; });
+    if (!r) return;
+    openModal({
+      title: '고정 루틴을 지울까요?',
+      body: '"' + r.text + '" 항목이 매일 목록에서 빠져요.',
+      ok: '지우기',
+      cancel: '그만두기',
+      onOk: function () {
+        state.routines = state.routines.filter(function (x) { return x.id !== rid; });
+        save();
+        renderAll();
+        closeModal();
+        toast('고정 루틴을 지웠어요');
+      }
+    });
+  }
+
+  function editRoutine(rid) {
+    var r = state.routines.find(function (x) { return x.id === rid; });
+    if (!r) return;
+    openModal({
+      title: '고정 루틴 이름 바꾸기',
+      body: '매일 목록에 이 이름으로 보여요.',
+      ok: '저장',
+      cancel: '그만두기',
+      input: { value: r.text, label: '루틴 이름' },
+      onOk: function (value) {
+        var v = String(value || '').trim();
+        if (!v) { toast('이름을 적어 주세요'); return; }
+        r.text = v;
+        save();
+        renderAll();
+        closeModal();
+        toast('이름을 바꿨어요 ✏️');
+      }
+    });
+  }
+  function claimKey() { return dateKey(); }
+  function isClaimed(id) {
+    var c = state.claims[claimKey()];
+    return !!(c && c[id]);
+  }
+  function bonusEligible(id) { return todayMinutes(id) >= STUDY_BONUS_MIN && !isClaimed(id); }
+
+  function elapsedMs() {
+    var t = state.timer;
+    var e = Number(t.baseMs) || 0;
+    if (t.running && t.startedAt) e += Math.max(0, Date.now() - new Date(t.startedAt).getTime());
+    return e;
+  }
+  function timerParts() {
+    var ms = elapsedMs();
+    var sec = Math.floor(ms / 1000);
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (state.timer.mode === 'countdown') {
+      var left = Math.max(0, Number(state.timer.targetMin) * 60000 - ms);
+      var ls = Math.ceil(left / 1000);
+      return { text: pad2(Math.floor(ls / 60)) + ':' + pad2(ls % 60), left: left, elapsed: ms };
+    }
+    return { text: (h > 0 ? h + ':' : '') + pad2(m) + ':' + pad2(s), left: 0, elapsed: ms };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 토스트 / 모달                                                       */
+  /* ------------------------------------------------------------------ */
+  function toast(msg) {
+    var wrap = $('#toastWrap');
+    if (!wrap) return;
+    var el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(function () {
+      el.classList.add('is-out');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+    }, 2200);
+  }
+
+  var modalState = null;
+  function openModal(opts) {
+    modalState = opts;
+    var inputHTML = opts.input ? '<input class="field modal-field" id="modalInput" maxlength="40" value="' + esc(opts.input.value || '') + '" placeholder="' + esc(opts.input.label || '') + '" aria-label="' + esc(opts.input.label || '') + '">' : '';
+    modalRoot.innerHTML = '<div class="modal-back" data-act="modal:backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="' + esc(opts.title) + '">' +
+      '<h3>' + esc(opts.title) + '</h3>' +
+      '<p>' + esc(opts.body || '') + '</p>' + inputHTML +
+      '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" data-act="modal:close">' + esc(opts.cancel || '닫기') + '</button>' +
+      '<button class="btn btn-primary" data-act="modal:ok">' + esc(opts.ok || '좋아요') + '</button>' +
+      '</div></div></div>';
+    var input = $('#modalInput', modalRoot);
+    if (input) { input.focus(); input.select(); }
+    else { var btn = $('.modal .btn-primary', modalRoot); if (btn) btn.focus(); }
+  }
+  function closeModal() { modalState = null; modalRoot.innerHTML = ''; }
+
+  /* ------------------------------------------------------------------ */
+  /* 렌더: 셸                                                           */
+  /* ------------------------------------------------------------------ */
+  function renderMembers() {
+    var switcher = $('#memberSwitch');
+    if (switcher) {
+      switcher.innerHTML = MEMBER_IDS.map(function (id) {
+        var m = MEMBERS[id];
+        var cls = 'member-btn' + (state.activeMember === id ? ' is-active' : '');
+        return '<button class="' + cls + '" data-act="member:select" data-member="' + id + '" aria-pressed="' + (state.activeMember === id) + '">' +
+          '<span class="m-avatar">' + faceSVG(id) + '</span>' +
+          '<span class="m-body"><span class="m-name">' + esc(m.name) + '</span>' +
+          '<span class="m-meta">' + esc(m.kind) + ' · 용돈 ' + won(balanceOf(id)) + '원</span></span>' +
+          '<span class="m-star">⭐' + state.members[id].stars + '</span>' +
+          '</button>';
+      }).join('');
+    }
+    var mobile = $('#mobileMembers');
+    if (mobile) {
+      mobile.innerHTML = MEMBER_IDS.map(function (id) {
+        var active = state.activeMember === id;
+        return '<button class="' + (active ? 'is-active' : '') + '" data-act="member:select" data-member="' + id + '" aria-pressed="' + active + '">' +
+          faceSVG(id) + '<span>' + esc(MEMBERS[id].name) + '</span></button>';
+      }).join('');
+    }
+  }
+
+  function renderNav() {
+    var nav = $('#nav');
+    if (!nav) return;
+    var soon = combinedStats(state.activeMember);
+    var remain = Math.max(0, soon.total - soon.done);
+    nav.innerHTML = PAGES.map(function (p) {
+      var badge = p.id === 'study' && remain > 0 ? '<span class="nav-badge">' + remain + '</span>' : '';
+      return '<button class="nav-item' + (state.page === p.id ? ' is-active' : '') + '" data-act="nav:page" data-page="' + p.id + '" aria-current="' + (state.page === p.id ? 'page' : 'false') + '">' +
+        '<span class="nav-ico">' + icon(p.icon) + '</span>' +
+        '<span class="nav-txt">' + esc(p.nav) + '</span>' +
+        '<span class="nav-txt-short">' + esc(p.short || p.nav) + '</span>' + badge + '</button>';
+    }).join('');
+  }
+
+  function renderTopbar() {
+    var p = PAGES.find(function (x) { return x.id === state.page; }) || PAGES[0];
+    var t = $('#tbTitle');
+    if (t) t.innerHTML = '<span class="tb-emoji">' + pageEmoji(p.id) + '</span>' + esc(p.title);
+    var s = $('#tbSub');
+    if (s) s.textContent = p.sub;
+    var d = $('#dateChip');
+    if (d) {
+      var now = new Date();
+      d.innerHTML = '<span>🌤️</span><b>' + (now.getMonth() + 1) + '월 ' + now.getDate() + '일 ' + weekdayKR(now) + '요일</b><span>·</span><span>' + nowGreeting() + '</span>';
+    }
+    document.title = p.title + ' · 우리 가족 기록장';
+  }
+
+  function pageEmoji(id) {
+    return { home: '🏡', study: '📚', stamps: '🌟', allowance: '🪙', calendar: '🗓️', chat: '💌' }[id] || '🌼';
+  }
+
+  function renderPage() {
+    var page = $('#page');
+    if (!page) return;
+    if (state.page === 'home') page.innerHTML = homeHTML();
+    else if (state.page === 'study') page.innerHTML = studyHTML();
+    else if (state.page === 'stamps') page.innerHTML = stampsHTML();
+    else if (state.page === 'allowance') page.innerHTML = allowanceHTML();
+    else if (state.page === 'calendar') page.innerHTML = calendarHTML();
+    else page.innerHTML = chatHTML();
+    if (state.page === 'chat') scrollChat();
+  }
+
+  function renderAll() {
+    renderMembers();
+    renderNav();
+    renderTopbar();
+    renderPage();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 홈                                                                 */
+  /* ------------------------------------------------------------------ */
+  function homeHTML() {
+    return '<div class="home-grid">' + weatherCardHTML() + scheduleWidgetHTML() + missionCardHTML() + summaryCardHTML() +
+      memberCardHTML('choco') + memberCardHTML('hodori') + '</div>';
+  }
+
+  function weatherCardHTML() {
+    var w = state.weather;
+    var head = '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🌤️</span>오늘의 날씨</div><div class="ch-note">서울</div></div>';
+    if (!w) {
+      return '<section class="card tint-sky h-weather" id="weatherCard">' + head +
+        '<div class="empty"><div class="empty-face">🌥️</div>날씨를 불러오는 중이에요…</div>' +
+        '<div class="weather-foot"><button class="chip" data-act="weather:refresh">↻ 다시 불러오기</button></div></section>';
+    }
+    var pm = w.pm25 != null ? w.pm25 : null;
+    var pmLabel = '보통', pmCls = 'tag-mint', pmIco = '🙂';
+    if (pm != null) {
+      if (pm <= 15) { pmLabel = '좋음'; pmCls = 'tag-mint'; pmIco = '🌿'; }
+      else if (pm <= 35) { pmLabel = '보통'; pmCls = 'tag-mint'; pmIco = '🙂'; }
+      else if (pm <= 75) { pmLabel = '나쁨'; pmCls = 'tag-peach'; pmIco = '😷'; }
+      else { pmLabel = '매우 나쁨'; pmCls = 'tag-pink'; pmIco = '🚨'; }
+    }
+    var tip = w.isDemo ? '연결되면 실제 서울 날씨로 바뀌어요.' :
+      (pm != null && pm > 35 ? '바깥 놀이는 잠깐 쉬고, 마스크를 챙겨요.' :
+        (w.temp >= 28 ? '물을 자주 마시고 시원하게 지내요.' :
+          (w.temp <= 3 ? '따뜻하게 입고 나가요.' : '산책하기 딱 좋은 날이에요!')));
+    return '<section class="card tint-sky h-weather" id="weatherCard">' + head +
+      '<div class="weather-top"><div class="weather-ico">' + weatherSVG(w.code) + '</div>' +
+      '<div class="weather-main"><div class="weather-city">서울 · ' + (w.isDemo ? '예시 데이터' : '실시간') + '</div>' +
+      '<div class="weather-temp">' + (w.temp != null ? Math.round(w.temp) : '–') + '<small>°C</small></div>' +
+      '<div class="weather-desc">' + esc(w.label) + ' · 최저 ' + Math.round(w.min) + '° · 최고 ' + Math.round(w.max) + '°</div></div></div>' +
+      '<div class="weather-badges"><span class="tag ' + pmCls + '">' + pmIco + ' 미세먼지 ' + pmLabel + '</span>' +
+      (pm != null ? '<span class="tag tag-sky">초미세 ' + Math.round(w.pm25) + '㎍/㎥</span>' : '') +
+      '<span class="tag tag-peach">' + esc(w.tempTip || '') + '</span></div>' +
+      '<div class="weather-tip">💡 ' + esc(tip) + '</div>' +
+      '<div class="weather-foot"><button class="chip" data-act="weather:refresh">↻ 새로고침</button>' +
+      '<span class="dot"></span>' + (w.at ? timeHM(w.at) : '') + ' 기준 · Open-Meteo</div>' +
+      '</section>';
+  }
+
+  function missionCardHTML() {
+    var items = state.missions.items;
+    var done = items.filter(function (m) { return m.done; }).length;
+    var rows = items.map(function (m) {
+      return '<div class="mission-row' + (m.done ? ' is-done' : '') + '">' +
+        '<button class="check" data-act="mission:toggle" data-id="' + m.id + '" aria-label="' + esc(m.text) + ' 완료 표시" aria-pressed="' + m.done + '">' + icon('check') + '</button>' +
+        '<span class="mission-txt">' + esc(m.text) + '</span>' +
+        '<span class="mission-who">' + esc(m.who) + '</span></div>';
+    }).join('');
+    return '<section class="card tint-peach h-mission">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🌱</span>오늘의 가족 미션</div>' +
+      '<div class="ch-note">' + done + '/' + items.length + ' 완료</div></div>' +
+      '<div class="mission-list">' + rows + '</div>' +
+      '<div class="mission-progress"><div class="progress" style="flex:1"><span style="width:' + pct(done, items.length) + '%"></span></div>' +
+      '<span>' + pct(done, items.length) + '%</span></div>' +
+      '<div class="mission-foot">🌿 다 같이 하면 더 즐거워요</div>' +
+      '</section>';
+  }
+
+  function summaryCardHTML() {
+    var famDone = 0, famAll = 0;
+    MEMBER_IDS.forEach(function (id) {
+      var c = combinedStats(id);
+      famDone += c.done; famAll += c.total;
+    });
+    var stamps = stampCount('choco') + stampCount('hodori');
+    var mins = todayMinutes('choco') + todayMinutes('hodori');
+    var praise = state.praise.length;
+    return '<section class="card tint-mint h-summary">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">✨</span>오늘의 체크</div></div>' +
+      '<div class="summary-grid">' +
+      '<div class="summary-cell is-pink"><span class="sc-num">' + famDone + '/' + famAll + '</span><span class="sc-lbl">할 일 완료</span></div>' +
+      '<div class="summary-cell is-mint"><span class="sc-num">' + stamps + '<small style="font-size:11px;color:#b3a090">/40</small></span><span class="sc-lbl">모은 도장</span></div>' +
+      '<div class="summary-cell is-sky"><span class="sc-num">' + mins + '<small style="font-size:11px;color:#b3a090">분</small></span><span class="sc-lbl">오늘 공부</span></div>' +
+      '<div class="summary-cell is-butter"><span class="sc-num">' + praise + '<small style="font-size:11px;color:#b3a090">장</small></span><span class="sc-lbl">칭찬 스티커</span></div>' +
+      '</div></section>';
+  }
+
+  function memberCardHTML(id) {
+    var m = MEMBERS[id];
+    var c = combinedStats(id);
+    var rs = c.routines;
+    var tint = id === 'choco' ? 'tint-pink' : 'tint-butter';
+    return '<section class="card ' + tint + ' h-member member-card">' +
+      '<div class="mc-top"><div class="mc-avatar">' + charSVG(id) + '</div>' +
+      '<div class="mc-id"><div class="mc-name">' + esc(m.name) + '</div>' +
+      '<div class="mc-role">' + esc(m.kind) + '</div>' +
+      '<div class="mc-mood">' + m.moodIco + ' ' + esc(m.mood) + '</div></div></div>' +
+      '<div class="mc-stats">' +
+      '<div class="mc-stat"><div class="ms-lbl">칭찬 별</div><div class="ms-val">⭐ ' + state.members[id].stars + '<small> 개</small></div></div>' +
+      '<div class="mc-stat"><div class="ms-lbl">내 용돈</div><div class="ms-val">' + won(balanceOf(id)) + '<small> 원</small></div></div>' +
+      '</div>' +
+      '<div class="mc-mission"><div class="mm-top"><span>오늘의 루틴 · 할 일</span><span>' + c.done + '/' + c.total + ' 완료</span></div>' +
+      '<div class="progress ' + (id === 'choco' ? '' : 'mint') + '"><span style="width:' + pct(c.done, c.total) + '%"></span></div>' +
+      '<div class="mc-routine">🔁 고정 루틴 ' + rs.done + '/' + rs.total + ' · 📌 할 일 ' + c.todos.done + '/' + c.todos.total + '</div></div>' +
+      '<div class="mc-actions">' +
+      '<button class="btn btn-sm" data-act="nav:page" data-page="study">할 일 보기</button>' +
+      '<button class="btn btn-sm btn-soft" data-act="nav:praise" data-to="' + id + '">칭찬 보내기</button>' +
+      '</div></section>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 할 일 & 공부                                                        */
+  /* ------------------------------------------------------------------ */
+  var presetTarget = 'both';
+  var presetSlot = 'afternoon';
+  var ROUTINE_PRESETS = [
+    { emoji: '📖', text: '영어 따라읽기' },
+    { emoji: '🎧', text: '영어집중듣기1' },
+    { emoji: '🎧', text: '영어집중듣기2' },
+    { emoji: '🦷', text: '양치하기' },
+    { emoji: '🔢', text: '수학숙제' },
+    { emoji: '🧮', text: '웅진수학풀기' },
+    { emoji: '🀄', text: '한자' },
+    { emoji: '📚', text: '책읽기' },
+    { emoji: '📰', text: '신문읽기' },
+    { emoji: '🧸', text: '장난감정리' },
+    { emoji: '📗', text: '읽은 책 정리하기' }
+  ];
+
+  function studyHTML() {
+    var id = state.activeMember;
+    return '<div class="study-grid">' +
+      '<div class="study-col">' + routinesCardHTML(id) + '</div>' +
+      '<div class="study-col">' + presetsCardHTML() + todoCardHTML(id) + '</div>' +
+      '<div class="study-col">' + timerCardHTML() + studyLogCardHTML(id) + '</div>' +
+      '</div>';
+  }
+
+  function presetsCardHTML() {
+    var targets = [['both', '둘 다'], ['choco', MEMBERS.choco.name], ['hodori', MEMBERS.hodori.name]].map(function (t) {
+      return '<button class="chip' + (presetTarget === t[0] ? ' is-on' : '') + '" data-act="preset:target" data-member="' + t[0] + '" aria-pressed="' + (presetTarget === t[0]) + '">' + esc(t[1]) + '</button>';
+    }).join('');
+    var slots = [['morning', '🌅 아침'], ['afternoon', '🏫 점심 · 귀가 후']].map(function (s) {
+      return '<button class="chip' + (presetSlot === s[0] ? ' is-on' : '') + '" data-act="preset:slot" data-slot="' + s[0] + '" aria-pressed="' + (presetSlot === s[0]) + '">' + s[1] + '</button>';
+    }).join('');
+    var chips = ROUTINE_PRESETS.map(function (p) {
+      return '<button class="preset-chip" data-act="routine:preset" data-text="' + esc(p.text) + '">' +
+        '<span class="pc-emoji">' + p.emoji + '</span>' + esc(p.text) + '</button>';
+    }).join('');
+    return '<section class="card tint-lilac">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">⚡</span>터치로 바로 추가</div>' +
+      '<div class="ch-note">고정 루틴</div></div>' +
+      '<div class="qp-settings"><span class="qp-label">누구</span>' + targets + '</div>' +
+      '<div class="qp-settings"><span class="qp-label">언제</span>' + slots + '</div>' +
+      '<div class="qp-row">' + chips + '</div>' +
+      '<div class="qp-note">칩을 누르면 바로 추가! ' +
+      (presetTarget === 'both' ? '둘 다에게' : esc(MEMBERS[presetTarget].name) + '에게') + ' 들어가요.</div>' +
+      '</section>';
+  }
+
+  function routinesCardHTML(id) {
+    var list = routinesFor(id);
+    var map = routineMap(id);
+    var done = list.filter(function (r) { return map[r.id]; }).length;
+    var groups = ['morning', 'afternoon'].map(function (g) {
+      var items = list.filter(function (r) { return r.group === g; });
+      var gdone = items.filter(function (r) { return map[r.id]; }).length;
+      var rows = items.length ? items.map(function (r) {
+        var on = !!map[r.id];
+        var badge = r.badge ? '<span class="tag tag-pink routine-badge">' + esc(r.badge) + '</span>' : '';
+        return '<div class="routine-row' + (on ? ' is-done' : '') + '">' +
+          '<button class="check" data-act="routine:toggle" data-id="' + r.id + '" aria-pressed="' + on + '" aria-label="' + esc(r.text) + ' 완료">' + icon('check') + '</button>' +
+          '<span class="routine-txt">' + esc(r.text) + '</span>' + badge +
+          '<span class="r-actions">' +
+          '<button class="icon-btn" data-act="routine:edit" data-id="' + r.id + '" aria-label="' + esc(r.text) + ' 이름 바꾸기" title="이름 바꾸기">' + icon('edit') + '</button>' +
+          '<button class="icon-btn" data-act="routine:del" data-id="' + r.id + '" aria-label="' + esc(r.text) + ' 삭제" title="고정 루틴에서 빼기">' + icon('trash') + '</button>' +
+          '</span></div>';
+      }).join('') : '<div class="routine-empty">아직 없어요</div>';
+      return '<div class="routine-group"><div class="rg-head">' + GROUP_ICON[g] + ' ' + GROUP_LABEL[g] +
+        '<span class="rg-count">' + gdone + '/' + items.length + '</span></div>' + rows + '</div>';
+    }).join('');
+
+    var form = '<form class="routine-add" data-form="routine">' +
+      '<div class="row2"><select name="group" class="field" aria-label="묶음"><option value="morning">아침</option><option value="afternoon" selected>점심 · 귀가 후</option></select>' +
+      '<select name="member" class="field" aria-label="누구 루틴"><option value="both">둘 다</option><option value="choco">' + esc(MEMBERS.choco.name) + '</option><option value="hodori">' + esc(MEMBERS.hodori.name) + '</option></select></div>' +
+      '<div class="inline" style="margin-top:6px"><input class="field" name="text" maxlength="24" placeholder="직접 적어서 추가" autocomplete="off" aria-label="새 고정 루틴">' +
+      '<button class="btn btn-primary btn-sm" type="submit">추가</button></div></form>';
+
+    var mondayNote = id === 'hodori'
+      ? '<div class="routine-note">🗓️ 월요일에는 <b>받아쓰기 연습</b>이 자동으로 들어와요.</div>' : '';
+
+    return '<section class="card tint-lilac">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🔁</span>매일 고정 루틴</div>' +
+      '<div class="ch-note">' + done + '/' + list.length + ' 완료</div></div>' +
+      '<div class="routine-groups">' + groups + '</div>' +
+      form + mondayNote +
+      '<div class="routine-foot"><span>매일 아침 새로 시작해요 · ' + esc(MEMBERS[id].name) + ' 기준</span></div>' +
+      '</section>';
+  }
+
+  function todoCardHTML(id) {
+    var list = memberTodos(id);
+    var done = list.filter(function (t) { return t.done; }).length;
+    var rows = list.length ? list.map(function (t) {
+      return '<div class="todo-row' + (t.done ? ' is-done' : '') + '">' +
+        '<button class="check" data-act="todo:toggle" data-id="' + t.id + '" aria-pressed="' + t.done + '" aria-label="' + esc(t.text) + ' 완료">' + icon('check') + '</button>' +
+        '<div class="todo-main"><span class="todo-txt">' + esc(t.text) + '</span>' +
+        '<span class="todo-tags"><span class="tag ' + (t.kind === 'study' ? 'tag-sky' : 'tag-mint') + '">' + (t.kind === 'study' ? '공부' : '할 일') + '</span>' +
+        (t.kind === 'study' && t.target ? '<span class="tag tag-butter">' + t.target + '분</span>' : '') + '</span></div>' +
+        '<button class="icon-btn" data-act="todo:del" data-id="' + t.id + '" aria-label="' + esc(t.text) + ' 삭제">' + icon('trash') + '</button></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">🐣</div>오늘만 할 일을 아래에서 추가해 보세요!</div>';
+
+    return '<section class="card">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">📌</span>오늘만 하는 할 일</div>' +
+      '<div class="ch-note">' + done + '/' + list.length + ' 완료</div></div>' +
+      '<div class="inline" style="margin-bottom:10px; flex-wrap:wrap; gap:6px">' +
+      '<div class="seg">' + MEMBER_IDS.map(function (mid) {
+        return '<button class="' + (state.activeMember === mid ? 'is-on' : '') + '" data-act="member:select" data-member="' + mid + '">' + esc(MEMBERS[mid].name) + '</button>';
+      }).join('') + '</div><span class="tag tag-peach">' + esc(MEMBERS[id].kind) + '</span></div>' +
+      '<div class="progress mint" style="margin-bottom:8px"><span style="width:' + pct(done, list.length) + '%"></span></div>' +
+      '<div class="todo-list">' + rows + '</div>' +
+      '<form class="add-row" data-form="todo">' +
+      '<select class="add-kind" name="kind" aria-label="종류"><option value="todo">할 일</option><option value="study">공부</option></select>' +
+      '<input class="field" name="text" placeholder="오늘만 할 일" maxlength="40" autocomplete="off" aria-label="새 할 일">' +
+      '<button class="btn btn-primary" type="submit">' + icon('plus') + '추가</button></form>' +
+      '</section>';
+  }
+
+  function studyLogCardHTML(id) {
+    var sessionsToday = state.sessions.filter(function (s) { return s.member === id && sameDay(s.at); });
+    var sessRows = sessionsToday.length ? sessionsToday.slice(0, 8).map(function (s) {
+      return '<div class="session-row"><span class="s-min">' + s.minutes + '분</span>' +
+        '<span class="tag tag-sky">공부</span>' +
+        (s.earned ? '<span class="tag tag-butter">+' + won(s.earned) + '원</span>' : '') +
+        '<span class="s-time">' + timeHM(s.at) + '</span></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">⏳</div>오늘 공부 기록이 아직 없어요.</div>';
+    return '<section class="card tint-mint">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">📖</span>오늘의 공부 기록</div>' +
+      '<div class="ch-note">' + todayMinutes(id) + '분 · +' + won(todayEarned(id)) + '원</div></div>' +
+      '<div class="session-list">' + sessRows + '</div></section>';
+  }
+
+  function timerCardHTML() {
+    var t = state.timer;
+    var parts = timerParts();
+    var running = !!t.running;
+    var id = state.activeMember;
+    var sub = t.mode === 'countdown'
+      ? (running ? '집중하는 중이에요! ' + t.targetMin + '분 목표' : t.targetMin + '분 · 시작을 눌러요')
+      : (running ? '시간을 재는 중이에요' : '자유롭게 시간을 재요');
+    var presets = [10, 20, 30, 50].map(function (n) {
+      return '<button class="chip' + (t.mode === 'countdown' && t.targetMin === n ? ' is-on' : '') + '" data-act="timer:preset" data-min="' + n + '">' + n + '분</button>';
+    }).join('');
+    return '<section class="card timer-card' + (running ? ' is-running' : '') + '" id="timerCard">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">⏱️</span>공부 타이머</div>' +
+      '<div class="ch-note">' + esc(MEMBERS[id].name) + '</div></div>' +
+      '<div class="timer-zone">' +
+      '<div class="timer-mode">' +
+      '<button class="' + (t.mode === 'countdown' ? 'is-on' : '') + '" data-act="timer:mode" data-mode="countdown">⏳ 남은 시간</button>' +
+      '<button class="' + (t.mode === 'stopwatch' ? 'is-on' : '') + '" data-act="timer:mode" data-mode="stopwatch">⏲️ 재는 시간</button></div>' +
+      '<div class="timer-display" id="timerDisplay">' + parts.text + '</div>' +
+      '<div class="timer-sub" id="timerSub">' + esc(sub) + '</div>' +
+      '<div class="timer-actions">' +
+      (running
+        ? '<button class="btn btn-soft" data-act="timer:pause">' + icon('pause') + '일시정지</button>'
+        : '<button class="btn btn-mint" data-act="timer:start">' + icon('play') + '시작</button>') +
+      '<button class="btn" data-act="timer:reset">' + icon('reset') + '초기화</button></div>' +
+      '<div class="preset-row">' + presets + '</div>' +
+      '</div>' +
+      '<div class="timer-foot"><span>오늘 ' + todayMinutes(id) + '분 공부</span><span>10분마다 500원 · 별 1개</span></div>' +
+      '<button class="btn btn-primary" style="width:100%;margin-top:8px" data-act="timer:save">공부 기록 저장하고 적립하기</button>' +
+      '</section>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 도장판 & 칭찬                                                       */
+  /* ------------------------------------------------------------------ */
+  var sendTo = 'hodori';
+  var praiseSticker = 'heart';
+
+  function stampsHTML() {
+    var praise = state.praise.slice().sort(function (a, b) { return new Date(b.at) - new Date(a.at); });
+    var wall = praise.length ? praise.map(function (p) {
+      return '<div class="praise-card"><div class="pc-sticker">' + stickerSVG(p.sticker) + '</div>' +
+        '<div class="pc-body"><div class="pc-top">' + esc(MEMBERS[p.from].name) + ' → ' + esc(MEMBERS[p.to].name) + ' · ' + dayLabel(p.at) + ' ' + timeHM(p.at) + '</div>' +
+        '<div class="pc-text">' + esc(p.text || '칭찬 스티커를 보냈어요!') + '</div></div></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">💌</div>아직 주고받은 칭찬 스티커가 없어요.</div>';
+
+    return '<div class="stamp-grid">' +
+      boardHTML('choco') + boardHTML('hodori') + sendCardHTML() +
+      '<section class="card tint-peach s-wall">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">💌</span>주고받은 칭찬 스티커</div>' +
+      '<div class="ch-note">' + praise.length + '장</div></div>' +
+      '<div class="praise-wall" id="praiseWall">' + wall + '</div></section>' +
+      '</div>';
+  }
+
+  function boardHTML(id) {
+    var slots = state.stamps[id];
+    var count = stampCount(id);
+    var cells = slots.map(function (on, i) {
+      return '<button class="stamp-slot' + (on ? ' is-stamped' : '') + '" data-act="stamp:toggle" data-member="' + id + '" data-index="' + i + '" aria-label="' + (i + 1) + '번 도장 ' + (on ? '지우기' : '찍기') + '" aria-pressed="' + on + '">' +
+        (on ? faceSVG(id) : '<span class="slot-num">' + (i + 1) + '</span>') + '</button>';
+    }).join('');
+    var next = Math.min(STAMP_COUNT, count + 1);
+    return '<section class="card ' + (id === 'choco' ? 'tint-pink' : 'tint-butter') + ' s-board">' +
+      '<div class="s-board-head"><span class="sb-face">' + faceSVG(id) + '</span>' +
+      '<div><div class="sb-name">' + esc(MEMBERS[id].name) + ' 도장판</div>' +
+      '<div class="sb-count" style="margin:0">' + (count >= STAMP_COUNT ? '가득 채웠어요! 🎉' : '다음은 ' + next + '번 도장') + '</div></div>' +
+      '<div class="sb-count">' + count + '/' + STAMP_COUNT + '</div></div>' +
+      '<div class="stamp-board">' + cells + '</div>' +
+      '<div class="progress" style="margin-top:10px"><span style="width:' + pct(count, STAMP_COUNT) + '%"></span></div>' +
+      '<div class="s-board-foot"><span>10개마다 별 1개 · 칭찬 스티커</span>' +
+      '<button class="btn btn-sm btn-ghost" data-act="stamp:reset" data-member="' + id + '">새 도장판</button></div>' +
+      '</section>';
+  }
+
+  function sendCardHTML() {
+    var picks = STICKER_KEYS.slice(0, 6).map(function (k) {
+      return '<button class="sticker-pick' + (praiseSticker === k ? ' is-on' : '') + '" data-act="praise:sticker" data-key="' + k + '" aria-label="스티커 ' + k + '" aria-pressed="' + (praiseSticker === k) + '">' + stickerSVG(k) + '</button>';
+    }).join('');
+    return '<section class="card tint-mint s-send">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🌟</span>칭찬 스티커 보내기</div></div>' +
+      '<div class="send-form">' +
+      '<div class="send-to">' + MEMBER_IDS.map(function (id) {
+        return '<button class="' + (sendTo === id ? 'is-on' : '') + '" data-act="praise:to" data-member="' + id + '">' + faceSVG(id) + esc(MEMBERS[id].name) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="sticker-picker">' + picks + '</div>' +
+      '<form data-form="praise">' +
+      '<input class="field" name="text" maxlength="60" placeholder="예: 오늘 동생 챙겨줘서 고마워!" autocomplete="off" aria-label="칭찬 한마디">' +
+      '<button class="btn btn-primary" type="submit" style="width:100%;margin-top:8px">' + stickerSVG(praiseSticker).replace('<svg ', '<svg width="18" height="18" style="margin-right:2px" ') + '칭찬 보내기</button>' +
+      '</form></div></section>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 용돈기입장                                                          */
+  /* ------------------------------------------------------------------ */
+  var ledgerMember = 'choco';
+  var ledgerFilter = 'all';
+
+  function allowanceHTML() {
+    var formHTML = '<form class="entry-form" data-form="ledger">' +
+      '<div class="row2"><div><label for="lgMember">누구</label><select class="field" id="lgMember" name="member">' +
+      MEMBER_IDS.map(function (id) { return '<option value="' + id + '"' + (ledgerMember === id ? ' selected' : '') + '>' + esc(MEMBERS[id].name) + '</option>'; }).join('') +
+      '</select></div><div><label for="lgType">종류</label><select class="field" id="lgType" name="type"><option value="income">입금</option><option value="expense">사용</option></select></div></div>' +
+      '<div class="row2"><div><label for="lgAmt">금액</label><input class="field" id="lgAmt" name="amount" type="number" min="1" max="9999999" inputmode="numeric" placeholder="0" required></div>' +
+      '<div><label for="lgCat">분류</label><select class="field" id="lgCat" name="category">' +
+      ['용돈', '공부 적립', '간식', '문구', '장난감', '저축', '기타'].map(function (c) { return '<option>' + c + '</option>'; }).join('') +
+      '</select></div></div>' +
+      '<div><label for="lgMemo">메모</label><input class="field" id="lgMemo" name="memo" maxlength="30" placeholder="예: 편의점 붕어빵" autocomplete="off"></div>' +
+      '<button class="btn btn-primary" type="submit">' + icon('plus') + '기록 추가</button></form>';
+
+    var rows = state.ledger.filter(function (e) {
+      if (e.member !== ledgerMember) return false;
+      if (ledgerFilter === 'all') return true;
+      return e.type === ledgerFilter;
+    }).sort(function (a, b) { return new Date(b.at) - new Date(a.at); });
+
+    var listHTML = rows.length ? rows.map(function (e) {
+      var out = e.type === 'expense';
+      var study = e.type === 'study';
+      return '<div class="ledger-row' + (out ? ' is-out' : '') + (study ? ' is-study' : '') + '">' +
+        '<div class="lr-ico">' + (out ? '🧾' : study ? '📚' : '💰') + '</div>' +
+        '<div class="lr-body"><div class="lr-title">' + esc(e.memo || e.category) + '</div>' +
+        '<div class="lr-meta">' + esc(e.category) + ' · ' + dayLabel(e.at) + ' ' + timeHM(e.at) + '</div></div>' +
+        '<div class="lr-amt">' + (out ? '−' : '+') + won(e.amount) + '원</div>' +
+        '<button class="icon-btn" data-act="ledger:del" data-id="' + e.id + '" aria-label="내역 삭제">' + icon('trash') + '</button></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">🧾</div>이 분류에는 내역이 없어요.</div>';
+
+    var inSum = rows.filter(function (e) { return e.type !== 'expense'; }).reduce(function (s, e) { return s + e.amount; }, 0);
+    var outSum = rows.filter(function (e) { return e.type === 'expense'; }).reduce(function (s, e) { return s + e.amount; }, 0);
+
+    return '<div class="money-grid">' +
+      balanceCardHTML('choco') + balanceCardHTML('hodori') +
+      '<section class="card tint-butter m-rules">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">📚</span>공부 용돈 적립</div></div>' +
+      '<div class="rule-list">' +
+      '<div class="rule-row"><span class="rr-ico">⏱️</span>10분 공부할 때마다<span class="rr-val">+500원</span></div>' +
+      '<div class="rule-row"><span class="rr-ico">⭐</span>10분마다 칭찬 별<span class="rr-val">+1개</span></div>' +
+      '<div class="rule-row"><span class="rr-ico">🎁</span>하루 30분 채우면 보너스<span class="rr-val">+1,000원</span></div>' +
+      '</div>' +
+      MEMBER_IDS.map(function (id) {
+        var mins = todayMinutes(id);
+        var ok = bonusEligible(id);
+        var claimed = isClaimed(id);
+        return '<div class="claim-row' + (claimed ? ' is-done' : '') + '">' +
+          '<span class="cr-face">' + faceSVG(id) + '</span>' +
+          '<span class="cr-body"><b>' + esc(MEMBERS[id].name) + '</b><span>' + (claimed ? '오늘 보너스 받았어요 ✓' : '오늘 ' + mins + '분 / 30분') + '</span></span>' +
+          '<button class="btn btn-sm ' + (ok ? 'btn-mint' : '') + '" data-act="claim:bonus" data-member="' + id + '"' + (ok ? '' : ' disabled') + '>' +
+          (claimed ? '완료' : ok ? '+' + won(STUDY_BONUS) + '원' : '준비 중') + '</button></div>';
+      }).join('') +
+      '</section>' +
+      '<section class="card m-form"><div class="card-head"><div class="ch-title"><span class="ch-emoji">✏️</span>내역 추가</div></div>' + formHTML + '</section>' +
+      '<section class="card m-list">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🧾</span>' + esc(MEMBERS[ledgerMember].name) + ' 기입장</div>' +
+      '<div class="ch-note">잔액 ' + won(balanceOf(ledgerMember)) + '원</div></div>' +
+      '<div class="ledger-tools"><div class="seg mint">' +
+      MEMBER_IDS.map(function (id) {
+        return '<button class="' + (ledgerMember === id ? 'is-on' : '') + '" data-act="ledger:member" data-member="' + id + '">' + esc(MEMBERS[id].name) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="chip-row">' +
+      [['all', '전체'], ['income', '입금'], ['expense', '사용'], ['study', '공부']].map(function (f) {
+        return '<button class="chip' + (ledgerFilter === f[0] ? ' is-on' : '') + '" data-act="ledger:filter" data-filter="' + f[0] + '">' + f[1] + '</button>';
+      }).join('') + '</div></div>' +
+      '<div class="ledger-list">' + listHTML + '</div>' +
+      '<div class="ledger-total"><span>입금·적립 +' + won(inSum) + '원</span><span>사용 −' + won(outSum) + '원</span></div>' +
+      '</section></div>';
+  }
+
+  function balanceCardHTML(id) {
+    var m = MEMBERS[id];
+    return '<section class="card ' + (id === 'choco' ? 'tint-pink' : 'tint-sky') + ' m-balance balance-card">' +
+      '<div class="bc-top"><div class="bc-face">' + faceSVG(id) + '</div>' +
+      '<div><div class="bc-name">' + esc(m.name) + ' 용돈</div><div class="bc-sub">' + esc(m.kind) + ' · 칭찬 별 ' + state.members[id].stars + '개</div></div></div>' +
+      '<div class="bc-amount">' + won(balanceOf(id)) + '<small>원</small></div>' +
+      '<div class="bc-parts">' +
+      '<span class="bc-part">시작 <b>' + won(state.members[id].base) + '</b></span>' +
+      '<span class="bc-part">공부 <b>+' + won(studySum(id)) + '</b></span>' +
+      '<span class="bc-part">입금 <b>+' + won(incomeSum(id)) + '</b></span>' +
+      '<span class="bc-part">사용 <b>−' + won(expenseSum(id)) + '</b></span></div>' +
+      '<label class="bc-base">시작 금액<input class="field" type="number" min="0" max="9999999" value="' + state.members[id].base + '" data-change="member:base" data-member="' + id + '" aria-label="' + esc(m.name) + ' 시작 금액"></label>' +
+      '</section>';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 가족 건의 & 채팅                                                    */
+  /* ------------------------------------------------------------------ */
+  var chatStickerOpen = false;
+
+  function chatHTML() {
+    var msgs = state.chat.slice().sort(function (a, b) { return new Date(a.at) - new Date(b.at); });
+    var suggestions = msgs.filter(function (m) { return m.tag === '건의'; }).length;
+    var lastDay = null;
+    var log = msgs.map(function (m) {
+      var html = '';
+      var dk = dateKey(new Date(m.at));
+      if (dk !== lastDay) { lastDay = dk; html += '<div class="chat-day">' + dayLabel(m.at) + '</div>'; }
+      var me = m.from === state.activeMember;
+      var isSticker = m.type === 'sticker';
+      var reacts = m.reactions || { confirm: [], doit: [] };
+      var reactHTML = '<div class="msg-reacts">' +
+        ['confirm', 'doit'].map(function (k) {
+          var arr = reacts[k] || [];
+          var on = arr.indexOf(state.activeMember) >= 0;
+          return '<button class="react' + (on ? ' is-on' : '') + '" data-act="chat:react" data-id="' + m.id + '" data-react="' + k + '" aria-pressed="' + on + '">' +
+            (k === 'confirm' ? '확인!' : '해줄게!') + (arr.length ? ' <span class="r-count">' + arr.length + '</span>' : '') + '</button>';
+        }).join('') + '</div>';
+      html += '<div class="msg' + (me ? ' is-me' : '') + '">' +
+        '<div class="msg-avatar">' + faceSVG(m.from) + '</div>' +
+        '<div class="msg-body"><div class="msg-name">' + esc(MEMBERS[m.from].name) +
+        (m.tag ? ' <span class="tag ' + (m.tag === '건의' ? 'tag-butter' : m.tag === '질문' ? 'tag-sky' : 'tag-mint') + '">' + esc(m.tag) + '</span>' : '') + '</div>' +
+        '<div class="bubble' + (isSticker ? ' is-sticker' : '') + '">' + (isSticker ? stickerSVG(m.sticker) : esc(m.text)) + '</div>' +
+        '<div class="msg-time">' + timeHM(m.at) + '</div>' + reactHTML + '</div></div>';
+      return html;
+    }).join('');
+
+    var quickChips = QUICKS.map(function (q) {
+      return '<button class="chip" data-act="chat:quick" data-text="' + esc(q.text) + '">' + q.emoji + ' ' + esc(q.label) + '</button>';
+    }).join('');
+    var drawer = STICKER_KEYS.map(function (k) {
+      return '<button data-act="chat:sticker" data-key="' + k + '" aria-label="스티커 보내기">' + stickerSVG(k) + '</button>';
+    }).join('');
+
+    return '<div class="chat-grid">' +
+      '<section class="card chat-main">' +
+      '<div class="chat-head"><span class="ch-icon">💌</span><div><h2>가족 건의 & 채팅</h2>' +
+      '<div class="ch-sub">' + esc(MEMBERS.choco.name) + ' · ' + esc(MEMBERS.hodori.name) + '의 이야기방</div></div>' +
+      '<span class="ch-tag tag tag-butter">건의 ' + suggestions + '개</span></div>' +
+      '<div class="chat-guide">🍓 먹고 싶은 메뉴, 하고 싶은 것, 가족에게 바라는 점을 자유롭게 남겨 보세요!</div>' +
+      '<div class="chat-log" id="chatLog">' + log + '</div>' +
+      '<div class="chat-compose">' +
+      '<div class="compose-who"><span class="cw-label">말하는 사람</span>' +
+      MEMBER_IDS.map(function (id) {
+        return '<button class="cw-btn' + (state.activeMember === id ? ' is-on' : '') + '" data-act="member:select" data-member="' + id + '">' + faceSVG(id) + esc(MEMBERS[id].name) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="compose-chips">' + quickChips + '</div>' +
+      '<div class="sticker-drawer"' + (chatStickerOpen ? '' : ' hidden') + '>' + drawer + '</div>' +
+      '<form class="compose-box" data-form="chat">' +
+      '<button type="button" class="compose-stk' + (chatStickerOpen ? ' is-on' : '') + '" data-act="chat:drawer" aria-label="스티커 고르기" aria-expanded="' + chatStickerOpen + '">' + stickerSVG('strawberry', 'drawer-ico') + '</button>' +
+      '<input class="field" name="text" maxlength="200" placeholder="예: 내일 아침에 계란말이 먹고 싶어요!" autocomplete="off" aria-label="건의 내용">' +
+      '<button class="btn btn-primary compose-send" type="submit">보내기</button></form>' +
+      '</div></section>' +
+      '<aside class="chat-side">' +
+      '<div class="card side-card"><h3>💡 이렇게 남겨요</h3>' +
+      '<p>메뉴부터 하고 싶은 것까지, 무엇이든 좋아요.</p>' +
+      '<div class="tip-note" style="margin-top:8px">오늘 저녁은 뭐 먹고 싶어요~? 처럼 물어봐도 좋아요. 마음에 드는 건의에는 <b>확인!</b>이나 <b>해줄게!</b>를 눌러 답해 주세요.</div></div>' +
+      '<div class="card side-card"><h3>🍳 빠른 문장</h3><p>눌러서 바로 쓰기</p>' +
+      '<div class="quick-list">' + QUICKS.map(function (q) {
+        return '<button class="quick-btn" data-act="chat:quick" data-text="' + esc(q.text) + '"><span class="qb-emoji">' + q.emoji + '</span><span class="qb-txt">' + esc(q.text) + '</span></button>';
+      }).join('') + '</div></div>' +
+      '<div class="card side-card tint-mint"><h3>🌟 오늘의 건의</h3>' +
+      '<p>' + suggestions + '개의 건의가 오갔어요. 서로 ' + state.chat.length + '번 마음을 나눴어요.</p></div>' +
+      '</aside></div>';
+  }
+
+  function scrollChat() {
+    var log = $('#chatLog');
+    if (log) log.scrollTop = log.scrollHeight;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 가족 캘린더                                                         */
+  /* ------------------------------------------------------------------ */
+  var calView = null;
+  var calSelected = dateKey();
+  var evDraft = null;
+  var DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+  function parseDateKey(dk) {
+    var p = String(dk || '').split('-');
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  }
+  function byStart(a, b) { return (a.start || '') < (b.start || '') ? -1 : (a.start || '') > (b.start || '') ? 1 : 0; }
+  function repeatLabel(repeat) {
+    return DAY_ORDER.filter(function (w) { return repeat.indexOf(w) >= 0; })
+      .map(function (w) { return WEEKDAY_KR[w]; }).join('·');
+  }
+  function memberTag(member) {
+    var cls = member === 'choco' ? 'tag-pink' : member === 'hodori' ? 'tag-sky' : 'tag-mint';
+    var name = member === 'all' ? '공통' : MEMBERS[member].name;
+    return '<span class="tag ' + cls + '">' + esc(name) + '</span>';
+  }
+  function eventsOn(date) {
+    var dk = dateKey(date);
+    var wd = date.getDay();
+    return state.events.filter(function (ev) {
+      if (ev.repeat && ev.repeat.length) return ev.repeat.indexOf(wd) >= 0;
+      return ev.date === dk;
+    }).sort(byStart);
+  }
+  function timeToDate(date, hm) {
+    var p = String(hm || '00:00').split(':');
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), Number(p[0]) || 0, Number(p[1]) || 0, 0, 0);
+  }
+  function nextOccurrences(limit, days) {
+    var out = [], now = new Date();
+    for (var i = 0; i < (days || 14); i++) {
+      var d = new Date();
+      d.setDate(d.getDate() + i);
+      eventsOn(d).forEach(function (ev) {
+        var start = timeToDate(d, ev.start);
+        var end = timeToDate(d, ev.end || ev.start);
+        if (end < now) return;
+        out.push({ ev: ev, date: new Date(d.getTime()), start: start, end: end });
+      });
+    }
+    out.sort(function (a, b) { return a.start - b.start; });
+    return out.slice(0, limit || 3);
+  }
+  function whenLabel(occ) {
+    var now = new Date();
+    if (occ.start <= now && occ.end >= now) return '지금 진행 중';
+    var mins = Math.round((occ.start - now) / 60000);
+    if (mins <= 0) return '곧 시작';
+    if (mins <= 45) return '준비 시간!';
+    if (mins < 60) return mins + '분 뒤';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    if (h < 24) return h + '시간' + (m ? ' ' + m + '분' : '') + ' 뒤';
+    return dayLabel(occ.date.toISOString());
+  }
+  function dayTitle(d) {
+    return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + WEEKDAY_KR[d.getDay()] + '요일' +
+      (dateKey(d) === dateKey() ? ' · 오늘' : '');
+  }
+
+  /* 홈: 다음 일정 · 학원 준비 */
+  function scheduleWidgetHTML() {
+    var up = nextOccurrences(4, 14);
+    var head = '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🗓️</span>다음 일정 · 학원 준비</div>' +
+      '<div class="ch-note">' + (up.length ? dayLabel(up[0].date.toISOString()) : '일정 없음') + '</div></div>';
+    if (!up.length) {
+      return '<section class="card tint-butter h-schedule">' + head +
+        '<div class="empty"><div class="empty-face">🗓️</div>아직 일정이 없어요.<br>학원 시간을 넣어 두면 준비하기 편해요!</div>' +
+        '<button class="btn btn-sm btn-primary" style="width:100%" data-act="nav:page" data-page="calendar">일정 추가하기</button></section>';
+    }
+    var first = up[0];
+    var when = whenLabel(first);
+    var hot = (when === '준비 시간!' || when === '곧 시작' || when === '지금 진행 중');
+    var rest = up.slice(1, 3).map(function (o) {
+      return '<div class="nr-row member-' + o.ev.member + '"><span class="nr-time">' + esc(o.ev.start) + '</span>' +
+        '<span class="nr-title">' + esc(o.ev.title) + '</span>' +
+        '<span class="nr-when">' + esc(whenLabel(o)) + '</span></div>';
+    }).join('');
+    return '<section class="card tint-butter h-schedule">' + head +
+      '<div class="next-item member-' + first.ev.member + (hot ? ' is-hot' : '') + '">' +
+      '<div class="ni-time"><b>' + esc(first.ev.start) + '</b><span>' + (first.ev.end ? esc(first.ev.end) : '') + '</span></div>' +
+      '<div class="ni-body"><div class="ni-title">' + esc(first.ev.title) + ' ' + memberTag(first.ev.member) + '</div>' +
+      '<div class="ni-sub">' + (first.ev.place ? '📍 ' + esc(first.ev.place) : '') + '</div>' +
+      (first.ev.prep ? '<div class="ni-prep">🎒 ' + esc(first.ev.prep) + '</div>' : '') + '</div>' +
+      '<div class="ni-when">' + esc(when) + '</div></div>' +
+      (rest ? '<div class="next-rest">' + rest + '</div>' : '') +
+      '<div class="ni-foot"><button class="chip" data-act="nav:page" data-page="calendar">캘린더 전체 보기 →</button></div>' +
+      '</section>';
+  }
+
+  function calendarHTML() {
+    if (!calView) { var t = new Date(); calView = { y: t.getFullYear(), m: t.getMonth() }; }
+    return '<div class="calendar-grid">' +
+      '<div class="cal-col">' + monthCardHTML() + monthSummaryHTML() + prepCardHTML() + '</div>' +
+      '<div class="cal-col">' + dayCardHTML() + weekCardHTML() + '</div>' +
+      '</div>';
+  }
+
+  function monthCardHTML() {
+    var y = calView.y, m = calView.m;
+    var first = new Date(y, m, 1);
+    var startWd = first.getDay();
+    var dim = new Date(y, m + 1, 0).getDate();
+    var total = Math.ceil((startWd + dim) / 7) * 7;
+    var start = new Date(y, m, 1 - startWd);
+    var cells = '';
+    for (var i = 0; i < total; i++) {
+      var d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      var dk = dateKey(d);
+      var out = d.getMonth() !== m;
+      var evs = eventsOn(d);
+      var dots = evs.slice(0, 3).map(function (e) { return '<span class="cd-dot ' + e.member + '"></span>'; }).join('');
+      if (evs.length > 3) dots += '<span class="cd-more">+' + (evs.length - 3) + '</span>';
+      cells += '<button class="cal-day' + (out ? ' is-out' : '') + (dk === dateKey() ? ' is-today' : '') +
+        (dk === calSelected ? ' is-selected' : '') + (d.getDay() === 0 ? ' sun' : '') +
+        '" data-act="cal:select" data-date="' + dk + '" aria-label="' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 일정">' +
+        '<span class="cd-num">' + d.getDate() + '</span>' +
+        '<span class="cd-dots">' + dots + '</span></button>';
+    }
+    var wds = ['일', '월', '화', '수', '목', '금', '토'].map(function (w, idx) {
+      return '<span class="cal-wd' + (idx === 0 ? ' sun' : idx === 6 ? ' sat' : '') + '">' + w + '</span>';
+    }).join('');
+    return '<section class="card">' +
+      '<div class="cal-head"><div class="cal-month">' + y + '년 ' + (m + 1) + '월</div>' +
+      '<div class="cal-nav"><button class="icon-btn" data-act="cal:prev" aria-label="이전 달">‹</button>' +
+      '<button class="chip" data-act="cal:today">오늘</button>' +
+      '<button class="icon-btn" data-act="cal:next" aria-label="다음 달">›</button></div></div>' +
+      '<div class="cal-wds">' + wds + '</div>' +
+      '<div class="cal-grid">' + cells + '</div>' +
+      '<div class="cal-legend"><span class="lg"><i class="cd-dot choco"></i>' + esc(MEMBERS.choco.name) + '</span>' +
+      '<span class="lg"><i class="cd-dot hodori"></i>' + esc(MEMBERS.hodori.name) + '</span>' +
+      '<span class="lg"><i class="cd-dot all"></i>공통</span>' +
+      '<button class="btn btn-sm btn-primary" style="margin-left:auto" data-act="event:new">＋ 일정 추가</button></div>' +
+      '</section>';
+  }
+
+  function monthSummaryHTML() {
+    var y = calView.y, m = calView.m;
+    var dim = new Date(y, m + 1, 0).getDate();
+    var counts = { choco: 0, hodori: 0, all: 0 };
+    for (var i = 1; i <= dim; i++) {
+      eventsOn(new Date(y, m, i)).forEach(function (ev) { counts[ev.member] = (counts[ev.member] || 0) + 1; });
+    }
+    var chips = [['choco', MEMBERS.choco.name], ['hodori', MEMBERS.hodori.name], ['all', '공통']].map(function (t) {
+      return '<span class="bc-part"><i class="cd-dot ' + t[0] + '"></i> ' + esc(t[1]) + ' <b>' + (counts[t[0]] || 0) + '</b>회</span>';
+    }).join('');
+    return '<section class="card tint-mint">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">📌</span>이번 달 한눈에</div>' +
+      '<div class="ch-note">' + (m + 1) + '월</div></div>' +
+      '<div class="bc-parts">' + chips + '</div>' +
+      '</section>';
+  }
+
+  function prepCardHTML() {
+    var up = nextOccurrences(8, 7).filter(function (o) { return o.ev.prep; }).slice(0, 2);
+    var rows = up.length ? up.map(function (o) {
+      return '<div class="prep-row member-' + o.ev.member + '">' +
+        '<span class="pr-day">' + dayLabel(o.date.toISOString()) + '</span>' +
+        '<span class="pr-time">' + esc(o.ev.start) + '</span>' +
+        '<span class="pr-title">' + esc(o.ev.title) + '</span>' +
+        '<span class="pr-prep">🎒 ' + esc(o.ev.prep) + '</span></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">🎒</div>챙길 준비물이 없어요.</div>';
+    return '<section class="card tint-butter">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🎒</span>이번 주 챙길 준비물</div>' +
+      '<div class="ch-note">학원 전 확인</div></div>' +
+      '<div class="prep-list">' + rows + '</div></section>';
+  }
+
+  function dayCardHTML() {
+    var d = parseDateKey(calSelected);
+    var list = eventsOn(d);
+    var rows = list.length ? list.map(function (ev) {
+      return '<div class="day-row member-' + ev.member + '">' +
+        '<div class="dr-time"><b>' + esc(ev.start) + '</b>' + (ev.end ? '<span>' + esc(ev.end) + '</span>' : '') + '</div>' +
+        '<div class="dr-body"><div class="dr-title">' + esc(ev.title) + ' ' + memberTag(ev.member) + '</div>' +
+        '<div class="dr-badges">' +
+        (ev.repeat && ev.repeat.length ? '<span class="tag tag-butter">매주 ' + repeatLabel(ev.repeat) + '</span>' : '') +
+        (ev.example ? '<span class="tag tag-lilac">예시 일정</span>' : '') + '</div>' +
+        '<div class="dr-sub">' + [ev.place ? '📍 ' + esc(ev.place) : '', ev.prep ? '🎒 ' + esc(ev.prep) : ''].filter(Boolean).join(' · ') + '</div>' +
+        (ev.memo ? '<div class="dr-memo">📝 ' + esc(ev.memo) + '</div>' : '') + '</div>' +
+        '<div class="dr-actions"><button class="icon-btn" data-act="event:edit" data-id="' + ev.id + '" aria-label="일정 고치기">' + icon('edit') + '</button>' +
+        '<button class="icon-btn" data-act="event:del" data-id="' + ev.id + '" aria-label="일정 지우기">' + icon('trash') + '</button></div></div>';
+    }).join('') : '<div class="empty"><div class="empty-face">🌸</div>이 날은 일정이 없어요.<br>학원 시간을 넣어 두면 준비하기 편해요.</div>';
+    return '<section class="card tint-peach">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">📅</span>' + dayTitle(d) + '</div>' +
+      '<div class="ch-note">' + list.length + '개 일정</div></div>' +
+      '<div class="day-list">' + rows + '</div>' +
+      '<button class="btn btn-sm btn-soft" style="width:100%;margin-top:10px" data-act="event:new">＋ 이 날에 일정 추가</button>' +
+      '</section>';
+  }
+
+  function weekCardHTML() {
+    var rec = state.events.filter(function (e) { return e.repeat && e.repeat.length; });
+    var rows = DAY_ORDER.map(function (wd) {
+      var list = rec.filter(function (e) { return e.repeat.indexOf(wd) >= 0; }).sort(byStart);
+      if (!list.length) return '';
+      return '<div class="week-group"><div class="wg-head">' + WEEKDAY_KR[wd] + '요일</div>' +
+        list.map(function (ev) {
+          return '<div class="week-row member-' + ev.member + '"><span class="wr-time">' + esc(ev.start) + '</span>' +
+            '<span class="wr-title">' + esc(ev.title) + '</span>' + memberTag(ev.member) +
+            '<button class="icon-btn" data-act="event:edit" data-id="' + ev.id + '" aria-label="일정 고치기">' + icon('edit') + '</button>' +
+            '<button class="icon-btn" data-act="event:del" data-id="' + ev.id + '" aria-label="일정 지우기">' + icon('trash') + '</button></div>';
+        }).join('') + '</div>';
+    }).join('');
+    return '<section class="card tint-sky">' +
+      '<div class="card-head"><div class="ch-title"><span class="ch-emoji">🔁</span>매주 학원 · 고정 일정</div>' +
+      '<div class="ch-note">' + rec.length + '개</div></div>' +
+      (rows || '<div class="empty"><div class="empty-face">🏫</div>반복 일정이 없어요.</div>') +
+      '</section>';
+  }
+
+  /* 일정 추가·수정 모달 */
+  function openEventModal(id, presetDate) {
+    var ev = id ? state.events.find(function (x) { return x.id === id; }) : null;
+    evDraft = ev ? {
+      id: ev.id, title: ev.title, member: ev.member, repeat: (ev.repeat || []).slice(),
+      date: ev.date || presetDate || calSelected, start: ev.start || '16:00', end: ev.end || '',
+      place: ev.place || '', prep: ev.prep || '', memo: ev.memo || ''
+    } : {
+      id: null, title: '', member: state.activeMember, repeat: [],
+      date: presetDate || calSelected, start: '16:00', end: '17:00', place: '', prep: '', memo: ''
+    };
+    modalState = { custom: true };
+    renderEventModal();
+  }
+
+  function renderEventModal() {
+    var d = evDraft;
+    var wdChips = [1, 2, 3, 4, 5, 6, 0].map(function (w) {
+      var on = d.repeat.indexOf(w) >= 0;
+      return '<button type="button" class="wd-chip' + (on ? ' is-on' : '') + '" data-act="ev:wd" data-wd="' + w + '" aria-pressed="' + on + '">' + WEEKDAY_KR[w] + '</button>';
+    }).join('');
+    var memOpts = [['choco', MEMBERS.choco.name], ['hodori', MEMBERS.hodori.name], ['all', '공통']].map(function (t) {
+      return '<option value="' + t[0] + '"' + (d.member === t[0] ? ' selected' : '') + '>' + esc(t[1]) + '</option>';
+    }).join('');
+    modalRoot.innerHTML = '<div class="modal-back" data-act="modal:backdrop"><div class="modal ev-modal" role="dialog" aria-modal="true" aria-label="일정">' +
+      '<h3>' + (d.id ? '✏️ 일정 고치기' : '✏️ 일정 추가') + '</h3>' +
+      '<form data-form="event">' +
+      '<div class="ev-grid">' +
+      '<label class="ev-field ev-span2"><span>일정 이름</span><input class="field" name="title" maxlength="30" placeholder="예: 영어학원" value="' + esc(d.title) + '"></label>' +
+      '<label class="ev-field"><span>누구 일정</span><select class="field" name="member">' + memOpts + '</select></label>' +
+      '<label class="ev-field"><span>한 번만 · 날짜</span><input class="field" type="date" name="date" value="' + esc(d.date) + '"></label>' +
+      '<div class="ev-field ev-span2"><span>매주 반복할 요일 <em>(고르면 아래 날짜 대신 반복돼요)</em></span>' +
+      '<div class="wd-row">' + wdChips + '</div></div>' +
+      '<label class="ev-field"><span>시작</span><input class="field" type="time" name="start" value="' + esc(d.start) + '"></label>' +
+      '<label class="ev-field"><span>끝</span><input class="field" type="time" name="end" value="' + esc(d.end) + '"></label>' +
+      '<label class="ev-field"><span>장소</span><input class="field" name="place" maxlength="24" placeholder="예: 리틀영어학원" value="' + esc(d.place) + '"></label>' +
+      '<label class="ev-field"><span>준비물</span><input class="field" name="prep" maxlength="30" placeholder="예: 영어책 · 필통" value="' + esc(d.prep) + '"></label>' +
+      '<label class="ev-field ev-span2"><span>메모</span><input class="field" name="memo" maxlength="40" placeholder="예: 끝나고 문구점" value="' + esc(d.memo) + '"></label>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+      (d.id ? '<button type="button" class="btn btn-ghost ev-del" data-act="event:del" data-id="' + d.id + '">지우기</button>' : '') +
+      '<button type="button" class="btn btn-ghost" data-act="modal:close">취소</button>' +
+      '<button type="submit" class="btn btn-primary">저장</button>' +
+      '</div></form></div></div>';
+  }
+
+  function captureEventForm() {
+    var f = document.querySelector('form[data-form="event"]');
+    if (!f) return;
+    var el = f.elements;
+    evDraft.title = el.title.value;
+    evDraft.member = el.member.value;
+    evDraft.date = el.date.value || evDraft.date;
+    evDraft.start = el.start.value || evDraft.start;
+    evDraft.end = el.end.value;
+    evDraft.place = el.place.value;
+    evDraft.prep = el.prep.value;
+    evDraft.memo = el.memo.value;
+  }
+
+  function toggleEvWeekday(wd) {
+    captureEventForm();
+    wd = Number(wd);
+    var i = evDraft.repeat.indexOf(wd);
+    if (i >= 0) evDraft.repeat.splice(i, 1); else evDraft.repeat.push(wd);
+    renderEventModal();
+  }
+
+  function saveEventForm(form) {
+    var el = form.elements;
+    var title = (el.title.value || '').trim();
+    if (!title) { toast('일정 이름을 적어 주세요'); el.title.focus(); return; }
+    var repeat = (evDraft.repeat || []).slice();
+    var date = el.date.value || dateKey();
+    var obj = {
+      title: title, member: el.member.value, repeat: repeat,
+      date: repeat.length ? null : date,
+      start: el.start.value || '16:00', end: el.end.value || '',
+      place: (el.place.value || '').trim(), prep: (el.prep.value || '').trim(),
+      memo: (el.memo.value || '').trim(), example: false
+    };
+    if (evDraft.id) {
+      var ev = state.events.find(function (x) { return x.id === evDraft.id; });
+      if (ev) Object.assign(ev, obj);
+    } else {
+      state.events.push(Object.assign({ id: uid() }, obj));
+    }
+    calSelected = date;
+    var d = parseDateKey(date);
+    calView = { y: d.getFullYear(), m: d.getMonth() };
+    modalState = null;
+    closeModal();
+    save();
+    renderAll();
+    toast(evDraft.id ? '일정을 고쳤어요 ✏️' : '일정을 추가했어요 🗓️');
+  }
+
+  function delEvent(id) {
+    var ev = state.events.find(function (x) { return x.id === id; });
+    if (!ev) return;
+    modalState = { custom: true };
+    openModal({
+      title: '이 일정을 지울까요?',
+      body: '"' + ev.title + '" 일정이 캘린더에서 사라져요.',
+      ok: '지우기', cancel: '그만두기',
+      onOk: function () {
+        state.events = state.events.filter(function (x) { return x.id !== id; });
+        modalState = null;
+        closeModal();
+        save();
+        renderAll();
+        toast('일정을 지웠어요');
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 날씨                                                               */
+  /* ------------------------------------------------------------------ */
+  var WCODE = {
+    0: '맑음', 1: '대체로 맑음', 2: '구름 조금', 3: '흐림', 45: '안개', 48: '안개',
+    51: '이슬비', 53: '이슬비', 55: '이슬비', 56: '얼음 이슬비', 57: '얼음 이슬비',
+    61: '약한 비', 63: '비', 65: '강한 비', 66: '얼음 비', 67: '얼음 비',
+    71: '약한 눈', 73: '눈', 75: '많은 눈', 77: '눈', 80: '소나기', 81: '소나기', 82: '강한 소나기',
+    85: '눈 소나기', 86: '눈 소나기', 95: '천둥번개', 96: '천둥번개', 99: '천둥번개'
+  };
+  function demoWeather() {
+    return { temp: 11, min: 6, max: 15, code: 0, label: '맑음', pm25: 22, pm10: 34, isDemo: true, at: new Date().toISOString(), tempTip: '포근한 겉옷' };
+  }
+  function fetchJSON(url, ms) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () { if (!done) { done = true; reject(new Error('timeout')); } }, ms || 7000);
+      fetch(url, { cache: 'no-store' }).then(function (r) {
+        return r.json();
+      }).then(function (j) {
+        if (done) return;
+        done = true; clearTimeout(timer); resolve(j);
+      }).catch(function (e) {
+        if (done) return;
+        done = true; clearTimeout(timer); reject(e);
+      });
+    });
+  }
+  function loadWeather(force) {
+    var w = state.weather;
+    if (!force && w && !w.isDemo && w.at && Date.now() - new Date(w.at).getTime() < 30 * 60 * 1000) return;
+    var lat = 37.5665, lon = 126.9780;
+    var fcURL = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+      '&current=temperature_2m,weather_code,apparent_temperature&daily=temperature_2m_max,temperature_2m_min&timezone=Asia%2FSeoul&forecast_days=1';
+    var aqURL = 'https://air-quality-api.open-meteo.com/v1/air-quality?latitude=' + lat + '&longitude=' + lon +
+      '&current=pm10,pm2_5&timezone=Asia%2FSeoul';
+    Promise.all([fetchJSON(fcURL), fetchJSON(aqURL).catch(function () { return null; })]).then(function (res) {
+      var fc = res[0], aq = res[1];
+      if (!fc || !fc.current || !fc.daily) throw new Error('bad weather');
+      var code = Number(fc.current.weather_code);
+      var temp = Number(fc.current.temperature_2m);
+      var next = {
+        temp: temp,
+        min: Number(fc.daily.temperature_2m_min[0]),
+        max: Number(fc.daily.temperature_2m_max[0]),
+        code: code,
+        label: WCODE[code] || '맑음',
+        pm25: aq && aq.current ? Math.round(Number(aq.current.pm2_5)) : null,
+        pm10: aq && aq.current ? Math.round(Number(aq.current.pm10)) : null,
+        isDemo: false,
+        at: new Date().toISOString(),
+        tempTip: temp >= 28 ? '시원한 물' : temp <= 3 ? '따뜻한 옷' : '가벼운 겉옷'
+      };
+      state.weather = next;
+      save();
+      if (state.page === 'home') {
+        var el = $('#weatherCard');
+        if (el) el.outerHTML = weatherCardHTML();
+      }
+    }).catch(function () {
+      if (!state.weather) state.weather = demoWeather();
+      save();
+      if (state.page === 'home') {
+        var el = $('#weatherCard');
+        if (el) el.outerHTML = weatherCardHTML();
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 동작                                                               */
+  /* ------------------------------------------------------------------ */
+  function setPage(id) {
+    if (!PAGES.some(function (p) { return p.id === id; })) return;
+    state.page = id;
+    if (id === 'allowance') ledgerMember = state.activeMember;
+    saveSoon();
+    renderNav();
+    renderTopbar();
+    renderPage();
+    var scroller = $('.main-scroll');
+    if (scroller) scroller.scrollTop = 0;
+  }
+
+  function setMember(id) {
+    if (MEMBER_IDS.indexOf(id) < 0) return;
+    state.activeMember = id;
+    saveSoon();
+    renderMembers();
+    renderNav();
+    renderPage();
+    toast(MEMBERS[id].name + '으로 보는 중이에요 🐾');
+  }
+
+  function toggleMission(id) {
+    var m = state.missions.items.find(function (x) { return x.id === id; });
+    if (!m) return;
+    m.done = !m.done;
+    save();
+    renderPage();
+    if (m.done) toast('미션 완료! 멋져요 ✨');
+  }
+
+  function addTodo(text, kind) {
+    text = (text || '').trim();
+    if (!text) return;
+    state.todos.push({ id: uid(), member: state.activeMember, text: text, kind: kind === 'study' ? 'study' : 'todo', target: kind === 'study' ? 10 : 0, done: false });
+    save();
+    renderPage();
+    renderNav();
+    toast('할 일을 추가했어요 📌');
+  }
+
+  function toggleTodo(id) {
+    var t = state.todos.find(function (x) { return x.id === id; });
+    if (!t) return;
+    t.done = !t.done;
+    save();
+    renderPage();
+    renderNav();
+    if (t.done) toast('하나 끝! 최고예요 🎉');
+  }
+
+  function delTodo(id) {
+    state.todos = state.todos.filter(function (x) { return x.id !== id; });
+    save();
+    renderPage();
+    renderNav();
+    toast('할 일을 지웠어요');
+  }
+
+  function timerStart() {
+    var t = state.timer;
+    if (t.running) return;
+    t.running = true;
+    t.startedAt = new Date().toISOString();
+    save();
+    renderPage();
+  }
+  function timerPause() {
+    var t = state.timer;
+    if (!t.running) return;
+    t.baseMs = elapsedMs();
+    t.running = false;
+    t.startedAt = null;
+    save();
+    renderPage();
+  }
+  function timerReset() {
+    state.timer.baseMs = 0;
+    state.timer.running = false;
+    state.timer.startedAt = null;
+    save();
+    renderPage();
+    toast('타이머를 초기화했어요');
+  }
+  function timerMode(mode) {
+    if (mode !== 'countdown' && mode !== 'stopwatch') return;
+    state.timer.mode = mode;
+    state.timer.baseMs = 0;
+    state.timer.running = false;
+    state.timer.startedAt = null;
+    save();
+    renderPage();
+  }
+  function timerPreset(min) {
+    min = Number(min) || 10;
+    state.timer.mode = 'countdown';
+    state.timer.targetMin = min;
+    state.timer.baseMs = 0;
+    state.timer.running = false;
+    state.timer.startedAt = null;
+    save();
+    renderPage();
+  }
+
+  function saveSession() {
+    var mins = Math.floor(elapsedMs() / 60000);
+    var id = state.activeMember;
+    if (mins < 1) {
+      toast('1분 이상 공부하면 기록할 수 있어요 ⏱️');
+      return;
+    }
+    var stars = Math.floor(mins / 10);
+    var earned = stars * REWARD_PER_10MIN;
+    var at = new Date().toISOString();
+    state.sessions.unshift({ id: uid(), member: id, minutes: mins, stars: stars, earned: earned, at: at });
+    if (earned > 0) {
+      state.ledger.unshift({ id: uid(), member: id, type: 'study', amount: earned, category: '공부 적립', memo: '공부 ' + mins + '분', at: at });
+      state.members[id].stars += stars;
+    }
+    state.timer.baseMs = 0;
+    state.timer.running = false;
+    state.timer.startedAt = null;
+    save();
+    renderPage();
+    renderMembers();
+    toast(earned > 0
+      ? MEMBERS[id].name + ' ' + mins + '분 공부! 별 ' + stars + '개 · ' + won(earned) + '원 적립 🎉'
+      : MEMBERS[id].name + ' ' + mins + '분 기록! 10분을 채우면 용돈이 적립돼요');
+  }
+
+  function toggleStamp(id, index) {
+    index = Number(index);
+    if (MEMBER_IDS.indexOf(id) < 0 || isNaN(index) || index < 0 || index >= STAMP_COUNT) return;
+    var arr = state.stamps[id];
+    var wasOn = arr[index];
+    arr[index] = !arr[index];
+    var count = arr.filter(Boolean).length;
+    if (!wasOn) {
+      var milestone = [10, 20].find(function (n) { return count === n && state.milestones[id].indexOf(n) < 0; });
+      if (milestone) {
+        state.milestones[id].push(milestone);
+        state.members[id].stars += 1;
+        state.praise.unshift({
+          id: uid(), from: id === 'choco' ? 'hodori' : 'choco', to: id, sticker: 'star',
+          text: '도장 ' + milestone + '개를 모았어요! 정말 대단해요 ✨', at: new Date().toISOString()
+        });
+        toast('도장 ' + milestone + '개 달성! 별 1개와 칭찬 스티커를 받았어요 🌟');
+      }
+    }
+    save();
+    renderPage();
+    renderMembers();
+  }
+
+  function resetBoard(id) {
+    if (!MEMBER_IDS.indexOf(id) >= 0) return;
+    state.stamps[id] = new Array(STAMP_COUNT).fill(false);
+    save();
+    renderPage();
+    toast('새 도장판을 펼쳤어요 🐣');
+  }
+
+  function sendPraise(text) {
+    var to = sendTo;
+    var from = to === 'choco' ? 'hodori' : 'choco';
+    state.praise.unshift({
+      id: uid(), from: from, to: to, sticker: praiseSticker,
+      text: (text || '').trim() || '칭찬 스티커를 보냈어요!', at: new Date().toISOString()
+    });
+    if (state.praise.filter(function (p) { return p.to === to; }).length % 5 === 0) state.members[to].stars += 1;
+    save();
+    renderPage();
+    renderMembers();
+    toast(MEMBERS[to].name + '에게 칭찬 스티커를 보냈어요 💌');
+  }
+
+  function addLedger(form) {
+    var member = form.member.value;
+    var type = form.type.value;
+    var amount = Number(form.amount.value);
+    if (MEMBER_IDS.indexOf(member) < 0 || !amount || amount <= 0) {
+      toast('금액을 1원 이상 입력해 주세요');
+      return;
+    }
+    var at = new Date().toISOString();
+    state.ledger.unshift({
+      id: uid(), member: member, type: type, amount: Math.round(amount),
+      category: form.category.value, memo: (form.memo.value || '').trim(), at: at
+    });
+    ledgerMember = member;
+    save();
+    renderPage();
+    renderMembers();
+    toast((type === 'expense' ? '사용 ' : '입금 ') + won(amount) + '원을 기록했어요 ✏️');
+  }
+
+  function delLedger(id) {
+    state.ledger = state.ledger.filter(function (e) { return e.id !== id; });
+    save();
+    renderPage();
+    renderMembers();
+    toast('내역을 지웠어요');
+  }
+
+  function setBase(id, value) {
+    var v = Math.max(0, Math.round(Number(value) || 0));
+    state.members[id].base = v;
+    save();
+    renderPage();
+    renderMembers();
+  }
+
+  function claimBonus(id) {
+    if (!bonusEligible(id)) return;
+    var key = claimKey();
+    if (!state.claims[key]) state.claims[key] = {};
+    state.claims[key][id] = true;
+    var at = new Date().toISOString();
+    state.ledger.unshift({ id: uid(), member: id, type: 'study', amount: STUDY_BONUS, category: '공부 적립', memo: '공부 30분 보너스', at: at });
+    save();
+    renderPage();
+    renderMembers();
+    toast(MEMBERS[id].name + ' 보너스 ' + won(STUDY_BONUS) + '원 적립! 🎁');
+  }
+
+  function sendChat(text) {
+    text = (text || '').trim();
+    if (!text) return;
+    var msg = { id: uid(), from: state.activeMember, type: 'text', tag: '건의', text: text, at: new Date().toISOString(), reactions: { confirm: [], doit: [] } };
+    if (/먹고 싶|메뉴|간식|아침|저녁|점심/.test(text)) msg.tag = '건의';
+    if (/\?$|어요\?|까\?/.test(text)) msg.tag = '질문';
+    state.chat.push(msg);
+    save();
+    renderPage();
+    var input = $('.compose-box .field');
+    if (input) { input.value = ''; input.focus(); }
+    scrollChat();
+  }
+
+  function sendSticker(key) {
+    if (!STICKERS[key]) return;
+    state.chat.push({ id: uid(), from: state.activeMember, type: 'sticker', sticker: key, text: '', at: new Date().toISOString(), reactions: { confirm: [], doit: [] } });
+    chatStickerOpen = false;
+    save();
+    renderPage();
+    scrollChat();
+  }
+
+  function toggleReact(msgId, kind) {
+    var msg = state.chat.find(function (m) { return m.id === msgId; });
+    if (!msg) return;
+    if (!msg.reactions) msg.reactions = { confirm: [], doit: [] };
+    if (!msg.reactions[kind]) msg.reactions[kind] = [];
+    var arr = msg.reactions[kind];
+    var i = arr.indexOf(state.activeMember);
+    if (i >= 0) arr.splice(i, 1);
+    else arr.push(state.activeMember);
+    save();
+    renderPage();
+  }
+
+  function exportJSON() {
+    try {
+      var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = '우리-가족-기록장-' + dateKey() + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+      toast('백업 파일을 내려받았어요 🍀');
+    } catch (e) {
+      toast('백업 파일을 만들 수 없어요');
+    }
+  }
+
+  var pendingImport = null;
+  function handleImportFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var data = JSON.parse(String(reader.result));
+        if (!data || typeof data !== 'object' || !data.members) throw new Error('bad');
+        pendingImport = data;
+        openModal({
+          title: '불러온 기록으로 바꿀까요?',
+          body: '지금 저장된 기록은 사라지고, 백업 파일의 기록으로 바뀌어요.',
+          ok: '불러오기',
+          cancel: '그만두기'
+        });
+      } catch (e) {
+        toast('기록 파일을 읽을 수 없어요 (JSON 아님)');
+      }
+    };
+    reader.onerror = function () { toast('파일을 읽지 못했어요'); };
+    reader.readAsText(file);
+  }
+
+  function applyImport() {
+    if (!pendingImport) return;
+    var base = defaultState();
+    state = normalize(pendingImport, base);
+    state.page = 'home';
+    pendingImport = null;
+    save();
+    renderAll();
+    closeModal();
+    toast('기록을 불러왔어요 🐣');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 이벤트                                                             */
+  /* ------------------------------------------------------------------ */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-act]') : null;
+    if (!el) return;
+    var act = el.getAttribute('data-act');
+    var d = el.dataset;
+
+    switch (act) {
+      case 'nav:page': setPage(d.page); break;
+      case 'nav:praise':
+        sendTo = d.to === 'choco' ? 'choco' : 'hodori';
+        setPage('stamps');
+        break;
+      case 'member:select': setMember(d.member); break;
+      case 'mission:toggle': toggleMission(d.id); break;
+      case 'routine:toggle': toggleRoutine(d.id); break;
+      case 'routine:del': delRoutine(d.id); break;
+      case 'routine:edit': editRoutine(d.id); break;
+      case 'routine:preset': addRoutinePreset(d.text); break;
+      case 'preset:target': presetTarget = (d.member === 'choco' || d.member === 'hodori') ? d.member : 'both'; renderPage(); break;
+      case 'preset:slot': presetSlot = d.slot === 'morning' ? 'morning' : 'afternoon'; renderPage(); break;
+      case 'cal:prev': { calView.m -= 1; if (calView.m < 0) { calView.m = 11; calView.y -= 1; } renderPage(); break; }
+      case 'cal:next': { calView.m += 1; if (calView.m > 11) { calView.m = 0; calView.y += 1; } renderPage(); break; }
+      case 'cal:today': { var t = new Date(); calView = { y: t.getFullYear(), m: t.getMonth() }; calSelected = dateKey(); renderPage(); break; }
+      case 'cal:select': { calSelected = d.date; var pd = parseDateKey(d.date); calView = { y: pd.getFullYear(), m: pd.getMonth() }; renderPage(); break; }
+      case 'event:new': openEventModal(null, calSelected); break;
+      case 'event:edit': openEventModal(d.id); break;
+      case 'event:del': delEvent(d.id); break;
+      case 'ev:wd': toggleEvWeekday(d.wd); break;
+      case 'todo:toggle': toggleTodo(d.id); break;
+      case 'todo:del': delTodo(d.id); break;
+      case 'timer:start': timerStart(); break;
+      case 'timer:pause': timerPause(); break;
+      case 'timer:reset': timerReset(); break;
+      case 'timer:mode': timerMode(d.mode); break;
+      case 'timer:preset': timerPreset(d.min); break;
+      case 'timer:save': saveSession(); break;
+      case 'stamp:toggle': toggleStamp(d.member, d.index); break;
+      case 'stamp:reset': resetBoard(d.member); break;
+      case 'praise:to': sendTo = d.member; renderPage(); break;
+      case 'praise:sticker': praiseSticker = d.key; renderPage(); break;
+      case 'claim:bonus': claimBonus(d.member); break;
+      case 'ledger:member':
+        ledgerMember = d.member; renderPage(); break;
+      case 'ledger:filter':
+        ledgerFilter = d.filter; renderPage(); break;
+      case 'ledger:del': delLedger(d.id); break;
+      case 'chat:quick': {
+        var input = $('.compose-box .field');
+        if (input) { input.value = d.text; input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+        break;
+      }
+      case 'chat:sticker': sendSticker(d.key); break;
+      case 'chat:drawer': chatStickerOpen = !chatStickerOpen; renderPage(); break;
+      case 'chat:react': toggleReact(d.id, d.react); break;
+      case 'weather:refresh': loadWeather(true); renderPage(); toast('날씨를 새로 불러오는 중이에요'); break;
+      case 'backup:export': exportJSON(); break;
+      case 'backup:import': {
+        var fi = $('#importFile');
+        if (fi) fi.click();
+        break;
+      }
+      case 'modal:ok': {
+        var fn = modalState && modalState.onOk;
+        var mi = $('#modalInput');
+        if (fn) fn(mi ? mi.value : undefined);
+        else closeModal();
+        break;
+      }
+      case 'modal:close': closeModal(); break;
+      case 'modal:backdrop': if (e.target === el) closeModal(); break;
+      default: break;
+    }
+  });
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form || !form.dataset || !form.dataset.form) return;
+    e.preventDefault();
+    var kind = form.dataset.form;
+    if (kind === 'todo') {
+      addTodo(form.text.value, form.kind.value);
+      form.text.value = '';
+      form.text.focus();
+    } else if (kind === 'praise') {
+      sendPraise(form.text.value);
+      form.text.value = '';
+    } else if (kind === 'ledger') {
+      addLedger(form);
+    } else if (kind === 'routine') {
+      addRoutine(form);
+    } else if (kind === 'event') {
+      saveEventForm(form);
+    } else if (kind === 'chat') {
+      sendChat(form.text.value);
+    }
+  });
+
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el || !el.dataset) return;
+    if (el.dataset.change === 'member:base') setBase(el.dataset.member, el.value);
+    if (el.id === 'lgMember' && MEMBER_IDS.indexOf(el.value) >= 0) ledgerMember = el.value;
+    if (el.id === 'importFile') {
+      var f = el.files && el.files[0];
+      handleImportFile(f);
+      el.value = '';
+    }
+  });
+
+  /* 타이머 표시 갱신 */
+  var lastLeft = null;
+  function tick() {
+    if (!state) return;
+    var t = state.timer;
+    if (!t.running) { lastLeft = null; return; }
+    var parts = timerParts();
+    var disp = $('#timerDisplay');
+    if (disp) disp.textContent = parts.text;
+    if (t.mode === 'countdown') {
+      var left = parts.left;
+      if (lastLeft !== null && left < lastLeft && left <= 6000) {
+        var sub = $('#timerSub');
+        if (sub) sub.textContent = '거의 다 왔어요! 조금만 더 힘내요';
+      }
+      lastLeft = left;
+      if (left <= 0) {
+        t.baseMs = t.targetMin * 60000;
+        t.running = false;
+        t.startedAt = null;
+        save();
+        renderPage();
+        toast('목표 시간을 채웠어요! 정말 잘했어요 🎉');
+        return;
+      }
+    } else {
+      lastLeft = null;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 시작                                                               */
+  /* ------------------------------------------------------------------ */
+  function init() {
+    state = loadState();
+    ensureDaily();
+    modalRoot = $('#modalRoot');
+    renderAll();
+    setSaveNote('자동 저장됨 · ' + (state.updatedAt ? timeHM(state.updatedAt) : '지금'));
+    setInterval(tick, 500);
+    loadWeather(false);
+    window.addEventListener('beforeunload', function () { try { save(); } catch (e) {} });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modalState) closeModal();
+      if (e.key === 'Enter' && modalState && document.activeElement && document.activeElement.id === 'modalInput') {
+        e.preventDefault();
+        var okBtn = $('.modal .btn-primary');
+        if (okBtn) okBtn.click();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); toast('저장했어요 💾'); }
+    });
+  }
+
+  window.__FAMILY__ = {
+    get state() { return state; },
+    save: save,
+    setPage: setPage,
+    setMember: setMember,
+    render: renderAll
+  };
+
+  init();
+})();

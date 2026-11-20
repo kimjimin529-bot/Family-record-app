@@ -1,7 +1,5 @@
 # 개발용 스크린샷(배포에는 필요 없음)
 screenshots/
-final_shots.py
-verify_flows.py
 __pycache__/
 *.pyc
 .DS_Store
